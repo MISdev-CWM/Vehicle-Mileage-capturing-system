@@ -7,7 +7,25 @@ const { hashPassword } = require('./utils/password');
 
 const app = express();
 
-app.use(cors());
+const allowedOrigins = new Set([
+  'https://vehicle-mileage-capturing-system.vercel.app',
+  ...(process.env.CLIENT_URLS || process.env.CLIENT_URL || '')
+    .split(',')
+    .map(origin => origin.trim())
+    .filter(Boolean)
+]);
+
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.has(origin)) {
+      return callback(null, true);
+    }
+
+    return callback(new Error('Origin is not allowed by CORS'));
+  },
+  methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(express.json());
 
 const seedDefaultUsers = async () => {
