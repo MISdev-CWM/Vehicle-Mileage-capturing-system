@@ -2,6 +2,7 @@ const express = require('express');
 const Reading = require('../models/Reading');
 const User = require('../models/User');
 const Vehicle = require('../models/Vehicle');
+const CompanyDriver = require('../models/CompanyDriver');
 const { authenticate, authorizeRoles } = require('../middleware/auth');
 
 const router = express.Router();
@@ -177,6 +178,7 @@ const createDriverVehicleUsage = (readings, userMap) => {
     if (!firstReading || readingDate < firstReading.readingDate) {
       usage.firstReadings.set(day, {
         mileage: reading.extractedMileage,
+        confidence: reading.ocrConfidence,
         readingDate
       });
     }
@@ -229,6 +231,7 @@ const createDriverVehicleUsage = (readings, userMap) => {
         monthDistance: Math.round(dailyUsage
           .filter(day => day.date.startsWith(currentMonth))
           .reduce((total, day) => total + day.distance, 0)),
+        allDailyUsage: dailyUsage,
         dailyUsage: dailyUsage.slice(-7).reverse()
       };
     })
@@ -241,14 +244,87 @@ const createDriverVehicleUsage = (readings, userMap) => {
     ));
 };
 
+const createUserDailyUsage = (readings, userMap) => {
+  const usageMap = new Map();
+
+  readings.forEach(reading => {
+    const vehicleNumber = reading.vehicleId?.toUpperCase();
+    const readingDate = new Date(reading.readingDate);
+
+    if (!vehicleNumber || !reading.submittedBy || Number.isNaN(readingDate.getTime())) {
+      return;
+    }
+
+    const key = `user:${reading.submittedBy}:${vehicleNumber}`;
+    const day = calendarDateKey(readingDate);
+
+    if (!usageMap.has(key)) {
+      usageMap.set(key, {
+        key,
+        userId: reading.submittedBy,
+        vehicleNumber,
+        firstReadings: new Map()
+      });
+    }
+
+    const usage = usageMap.get(key);
+    const firstReading = usage.firstReadings.get(day);
+
+    if (!firstReading || readingDate < firstReading.readingDate) {
+      usage.firstReadings.set(day, {
+        mileage: reading.extractedMileage,
+        confidence: reading.ocrConfidence,
+        readingDate
+      });
+    }
+  });
+
+  return Array.from(usageMap.values()).flatMap(usage => {
+    const user = userMap.get(usage.userId);
+    const days = Array.from(usage.firstReadings.keys()).sort();
+
+    return days.flatMap(day => {
+      const nextDay = addCalendarDays(day, 1);
+      const start = usage.firstReadings.get(day);
+      const end = usage.firstReadings.get(nextDay);
+
+      if (!end) {
+        return [];
+      }
+
+      const distance = end.mileage - start.mileage;
+
+      if (distance < 0) {
+        return [];
+      }
+
+      return [{
+        key: `${usage.key}:${day}`,
+        userId: usage.userId,
+        name: user?.name || user?.username || 'Unknown User',
+        employeeId: user?.employeeId || '',
+        username: user?.username || '',
+        role: user?.role || 'user',
+        vehicleNumber: usage.vehicleNumber,
+        date: day,
+        startMileage: start.mileage,
+        endMileage: end.mileage,
+        confidence: start.confidence,
+        distance: Math.round(distance)
+      }];
+    });
+  }).sort((left, right) => right.date.localeCompare(left.date) || left.name.localeCompare(right.name));
+};
+
 router.get('/analytics', async (req, res) => {
   try {
-    const [readings, vehicles, users] = await Promise.all([
+    const [readings, vehicles, users, companyDriverCount] = await Promise.all([
       Reading.find()
         .sort({ vehicleId: 1, readingDate: 1 })
         .select('vehicleId extractedMileage ocrConfidence readingDate isCorrected submittedBy driverName'),
       Vehicle.find().sort({ vehicleNumber: 1 }).select('-__v'),
-      User.find().select('name employeeId username role isActive')
+      User.find().select('name employeeId username role isActive'),
+      CompanyDriver.countDocuments()
     ]);
 
     const currentMonthStart = new Date();
@@ -367,6 +443,7 @@ router.get('/analytics', async (req, res) => {
       }))
       .sort((a, b) => b.totalDistance - a.totalDistance || b.readingCount - a.readingCount);
     const driverVehicleUsage = createDriverVehicleUsage(readings, userMap);
+    const userDailyUsage = createUserDailyUsage(readings, userMap);
 
     const activeVehicles = vehicles.filter(vehicle => vehicle.status === 'active').length;
     const unassignedVehicles = vehicles.filter(vehicle => {
@@ -380,7 +457,7 @@ router.get('/analytics', async (req, res) => {
       kpis: {
         totalVehicles: vehicles.length,
         activeVehicles,
-        totalUsers: users.length,
+        totalUsers: users.filter(user => user.role !== 'driver').length + companyDriverCount,
         totalDrivers: users.filter(user => user.role === 'driver').length,
         totalReadings: readings.length,
         totalDistance: Math.round(totalDistance),
@@ -396,7 +473,8 @@ router.get('/analytics', async (req, res) => {
       })),
       vehicleUsage,
       operatorUsage,
-      driverVehicleUsage
+      driverVehicleUsage,
+      userDailyUsage
     });
   } catch (error) {
     console.error('Analytics error:', error);

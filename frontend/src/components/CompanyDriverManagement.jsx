@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import api from '../api';
 
 const emptyForm = {
@@ -12,6 +13,7 @@ const CompanyDriverManagement = () => {
   const [formData, setFormData] = useState(emptyForm);
   const [editingId, setEditingId] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [deletingDriver, setDeletingDriver] = useState(null);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -118,17 +120,17 @@ const CompanyDriverManagement = () => {
   };
 
   const handleDelete = async (driver) => {
-    const confirmed = window.confirm(`Delete company driver ${driver.employeeName}?`);
-
-    if (!confirmed) {
-      return;
-    }
-
     setError('');
     setSuccess('');
+    setDeletingDriver(driver);
+  };
+
+  const confirmDelete = async () => {
+    if (!deletingDriver) return;
 
     try {
-      await api.delete(`/company-drivers/${driver._id}`);
+      await api.delete(`/company-drivers/${deletingDriver._id}`);
+      setDeletingDriver(null);
       setSuccess('Company driver deleted successfully');
       await fetchDrivers();
     } catch (err) {
@@ -231,10 +233,10 @@ const CompanyDriverManagement = () => {
         )}
       </div>
 
-      {isModalOpen && (
+      {isModalOpen && createPortal((
         <div
-          className="fixed inset-0 z-[100] flex items-center justify-center px-4 py-6"
-          style={{ backgroundColor: 'rgba(2, 6, 23, 0.8)' }}
+          className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-950/80 px-4 py-6 backdrop-blur-md"
+          role="presentation"
         >
           <div className="bg-white rounded-xl shadow-xl border border-slate-200 w-full max-w-xl max-h-[90vh] overflow-y-auto">
             <div className="sticky top-0 bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between rounded-t-xl">
@@ -300,7 +302,20 @@ const CompanyDriverManagement = () => {
             </form>
           </div>
         </div>
-      )}
+      ), document.body)}
+
+      {deletingDriver && createPortal((
+        <div className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-950/80 px-4 py-6 backdrop-blur-md" role="presentation">
+          <div className="bg-white rounded-xl shadow-2xl border border-slate-200 w-full max-w-md p-6">
+            <h3 className="text-lg font-semibold text-slate-900">Delete company driver?</h3>
+            <p className="text-sm text-slate-500 mt-2">This will permanently remove {deletingDriver.employeeName} from the company driver records.</p>
+            <div className="flex justify-end gap-3 mt-6">
+              <button type="button" onClick={() => setDeletingDriver(null)} className="btn-secondary">Cancel</button>
+              <button type="button" onClick={confirmDelete} className="btn-danger">Delete Driver</button>
+            </div>
+          </div>
+        </div>
+      ), document.body)}
     </div>
   );
 };

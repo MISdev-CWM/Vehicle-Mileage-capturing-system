@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import api from '../api';
 
 const emptyForm = {
@@ -49,6 +50,7 @@ const EmployeeManagement = () => {
   const [formData, setFormData] = useState(emptyForm);
   const [editingId, setEditingId] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [deletingUser, setDeletingUser] = useState(null);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -171,17 +173,17 @@ const EmployeeManagement = () => {
   };
 
   const handleDelete = async (user) => {
-    const confirmed = window.confirm(`Delete user ${user.name}?`);
-
-    if (!confirmed) {
-      return;
-    }
-
     setError('');
     setSuccess('');
+    setDeletingUser(user);
+  };
+
+  const confirmDelete = async () => {
+    if (!deletingUser) return;
 
     try {
-      await api.delete(`/users/${user._id}`);
+      await api.delete(`/users/${deletingUser._id}`);
+      setDeletingUser(null);
       setSuccess('User deleted successfully');
       await fetchUsers();
     } catch (err) {
@@ -312,10 +314,10 @@ const EmployeeManagement = () => {
         )}
       </div>
 
-      {isModalOpen && (
+      {isModalOpen && createPortal((
         <div
-          className="fixed inset-0 z-[100] flex items-center justify-center px-4 py-6"
-          style={{ backgroundColor: 'rgba(2, 6, 23, 0.8)' }}
+          className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-950/80 px-4 py-6 backdrop-blur-md"
+          role="presentation"
         >
           <div className="bg-white rounded-xl shadow-xl border border-slate-200 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
             <div className="sticky top-0 bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between rounded-t-xl">
@@ -466,7 +468,20 @@ const EmployeeManagement = () => {
             </form>
           </div>
         </div>
-      )}
+      ), document.body)}
+
+      {deletingUser && createPortal((
+        <div className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-950/80 px-4 py-6 backdrop-blur-md" role="presentation">
+          <div className="bg-white rounded-xl shadow-2xl border border-slate-200 w-full max-w-md p-6">
+            <h3 className="text-lg font-semibold text-slate-900">Delete user?</h3>
+            <p className="text-sm text-slate-500 mt-2">This will permanently remove {deletingUser.name} and their login account.</p>
+            <div className="flex justify-end gap-3 mt-6">
+              <button type="button" onClick={() => setDeletingUser(null)} className="btn-secondary">Cancel</button>
+              <button type="button" onClick={confirmDelete} className="btn-danger">Delete User</button>
+            </div>
+          </div>
+        </div>
+      ), document.body)}
     </div>
   );
 };

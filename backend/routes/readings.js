@@ -6,7 +6,8 @@ const FormData = require('form-data');
 const Reading = require('../models/Reading');
 const Vehicle = require('../models/Vehicle');
 const CompanyDriver = require('../models/CompanyDriver');
-const { authenticate } = require('../middleware/auth');
+const User = require('../models/User');
+const { authenticate, authorizeRoles } = require('../middleware/auth');
 
 // CRITICAL: Store file in memory only, never on disk
 const upload = multer({ storage: multer.memoryStorage() });
@@ -148,22 +149,59 @@ router.get('/', async (req, res) => {
     }
 
     const skip = (parseInt(page, 10) - 1) * PAGE_SIZE;
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const tomorrowStart = new Date(todayStart);
+    tomorrowStart.setDate(tomorrowStart.getDate() + 1);
+    const todayFilter = { readingDate: { $gte: todayStart, $lt: tomorrowStart } };
 
-    const [readings, total] = await Promise.all([
+    const [readings, total, todayTotalReadings, allVehicleCount, regularUserCount, companyDriverCount, todayCorrectedRecords] = await Promise.all([
       Reading.find(filter)
         .sort({ readingDate: -1 })
         .skip(skip)
         .limit(PAGE_SIZE)
         .select('-__v'),
-      Reading.countDocuments(filter)
+      Reading.countDocuments(filter),
+      Reading.countDocuments(todayFilter),
+      Vehicle.countDocuments(),
+      User.countDocuments({ role: { $ne: 'driver' } }),
+      CompanyDriver.countDocuments(),
+      Reading.countDocuments({ ...todayFilter, isCorrected: true })
     ]);
+    const allUserCount = regularUserCount + companyDriverCount;
+
+    const submittedByValues = [...new Set(readings.map(reading => String(reading.submittedBy || '')).filter(Boolean))];
+    const objectIdValues = submittedByValues.filter(value => /^[a-f\d]{24}$/i.test(value));
+    const users = await User.find({
+      $or: [
+        ...(objectIdValues.length ? [{ _id: { $in: objectIdValues } }] : []),
+        { username: { $in: submittedByValues } },
+        { employeeId: { $in: submittedByValues } }
+      ]
+    }).select('name username employeeId');
+    const userMap = new Map();
+    users.forEach(user => {
+      userMap.set(user._id.toString(), user);
+      if (user.username) userMap.set(user.username, user);
+      if (user.employeeId) userMap.set(user.employeeId, user);
+    });
+    const readingsWithUserNames = readings.map(reading => ({
+      ...reading.toObject(),
+      submittedByName: userMap.get(String(reading.submittedBy))?.name || userMap.get(String(reading.submittedBy))?.username || 'Unknown User'
+    }));
 
     res.json({
-      readings,
+      readings: readingsWithUserNames,
       total,
       page: parseInt(page, 10),
       pages: Math.ceil(total / PAGE_SIZE),
-      pageSize: PAGE_SIZE
+      pageSize: PAGE_SIZE,
+      stats: {
+        todayTotalReadings,
+        allVehicleCount,
+        allUserCount,
+        todayCorrectedRecords
+      }
     });
   } catch (error) {
     console.error('Admin readings list error:', error);
@@ -199,6 +237,54 @@ router.get('/stats/:vehicleId', async (req, res) => {
     res.json({ totalReadings, totalDistance: Math.max(0, totalDistance), averageDaily });
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+// PUT /api/readings/:id — Admin can correct only the saved mileage value
+router.put('/:id', authenticate, authorizeRoles('admin'), async (req, res) => {
+  try {
+    const mileage = Number(req.body.mileage);
+
+    if (!Number.isFinite(mileage) || mileage < 0) {
+      return res.status(400).json({ error: 'A valid mileage value is required' });
+    }
+
+    const reading = await Reading.findById(req.params.id);
+
+    if (!reading) {
+      return res.status(404).json({ error: 'Reading not found' });
+    }
+
+    const previousMileage = reading.extractedMileage;
+    reading.extractedMileage = mileage;
+
+    if (mileage !== previousMileage && reading.originalMileage == null) {
+      reading.originalMileage = previousMileage;
+    }
+
+    reading.isCorrected = mileage !== previousMileage || reading.isCorrected;
+    await reading.save();
+
+    res.json({ success: true, reading });
+  } catch (error) {
+    console.error('Admin reading update error:', error);
+    res.status(500).json({ error: 'Failed to update reading' });
+  }
+});
+
+// DELETE /api/readings/:id — Admin can remove an incorrect reading
+router.delete('/:id', authenticate, authorizeRoles('admin'), async (req, res) => {
+  try {
+    const reading = await Reading.findByIdAndDelete(req.params.id);
+
+    if (!reading) {
+      return res.status(404).json({ error: 'Reading not found' });
+    }
+
+    res.json({ success: true, id: req.params.id });
+  } catch (error) {
+    console.error('Admin reading delete error:', error);
+    res.status(500).json({ error: 'Failed to delete reading' });
   }
 });
 

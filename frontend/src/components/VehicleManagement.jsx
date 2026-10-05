@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import api from '../api';
 
 const emptyForm = {
@@ -32,6 +33,40 @@ const formatDateDisplay = (value) => {
   return new Date(value).toLocaleDateString();
 };
 
+const formatDateTimeDisplay = (value) => {
+  if (!value) return '-';
+  return new Date(value).toLocaleString();
+};
+
+const formatUserName = (user) => {
+  if (!user) return 'Unknown user';
+  const name = user.name || user.username || 'Unknown user';
+
+  return user.username ? `${name} (${user.username})` : name;
+};
+
+const getCurrentAllocationEntries = (vehicle) => {
+  const activeEntries = (vehicle.allocationHistory || []).filter(entry => !entry.unassignedAt);
+
+  if (activeEntries.length > 0) {
+    return activeEntries;
+  }
+
+  if (vehicle.ownership === 'personal' && vehicle.allocatedUser) {
+    return [{
+      _id: vehicle.allocatedUser._id,
+      user: vehicle.allocatedUser,
+      assignedAt: vehicle.dateOfUserAllocation
+    }];
+  }
+
+  return (vehicle.allocatedDrivers || []).map(driver => ({
+    _id: driver._id,
+    user: driver,
+    assignedAt: vehicle.dateOfUserAllocation
+  }));
+};
+
 const VehicleManagement = () => {
   const [vehicles, setVehicles] = useState([]);
   const [assignableUsers, setAssignableUsers] = useState([]);
@@ -39,9 +74,12 @@ const VehicleManagement = () => {
   const [formData, setFormData] = useState(emptyForm);
   const [editingId, setEditingId] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [deletingVehicle, setDeletingVehicle] = useState(null);
   const [isAssignmentModalOpen, setIsAssignmentModalOpen] = useState(false);
   const [assignmentVehicle, setAssignmentVehicle] = useState(null);
   const [assignmentForm, setAssignmentForm] = useState(emptyAssignmentForm);
+  const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
+  const [historyVehicle, setHistoryVehicle] = useState(null);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -173,6 +211,16 @@ const VehicleManagement = () => {
     setIsAssignmentModalOpen(false);
   };
 
+  const openHistoryModal = (vehicle) => {
+    setHistoryVehicle(vehicle);
+    setIsHistoryModalOpen(true);
+  };
+
+  const closeHistoryModal = () => {
+    setHistoryVehicle(null);
+    setIsHistoryModalOpen(false);
+  };
+
   const handleAssignmentSubmit = async (e) => {
     e.preventDefault();
 
@@ -251,17 +299,17 @@ const VehicleManagement = () => {
   };
 
   const handleDelete = async (vehicle) => {
-    const confirmed = window.confirm(`Delete vehicle ${vehicle.vehicleNumber}?`);
-
-    if (!confirmed) {
-      return;
-    }
-
     setError('');
     setSuccess('');
+    setDeletingVehicle(vehicle);
+  };
+
+  const confirmDelete = async () => {
+    if (!deletingVehicle) return;
 
     try {
-      await api.delete(`/vehicles/${vehicle._id}`);
+      await api.delete(`/vehicles/${deletingVehicle._id}`);
+      setDeletingVehicle(null);
       setSuccess('Vehicle deleted successfully');
       await fetchVehicles();
     } catch (err) {
@@ -297,7 +345,7 @@ const VehicleManagement = () => {
         </div>
       )}
 
-      {!isModalOpen && !isAssignmentModalOpen && error && (
+      {!isModalOpen && !isAssignmentModalOpen && !isHistoryModalOpen && error && (
         <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg px-3 py-2">
           {error}
         </div>
@@ -345,7 +393,12 @@ const VehicleManagement = () => {
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {vehicles.map(vehicle => (
-                  <tr key={vehicle._id} className="hover:bg-slate-50 transition-colors">
+                  <tr
+                    key={vehicle._id}
+                    onClick={() => openHistoryModal(vehicle)}
+                    className="cursor-pointer hover:bg-slate-50 transition-colors"
+                    title="View allocation history"
+                  >
                     <td className="py-3 font-mono text-sm font-semibold text-slate-900">{vehicle.vehicleNumber}</td>
                     <td className="py-3 text-sm text-slate-900">{[vehicle.make, vehicle.name].filter(Boolean).join(' ') || '-'}</td>
                     <td className="py-3 text-sm text-slate-700 capitalize">{vehicle.ownership}</td>
@@ -360,13 +413,13 @@ const VehicleManagement = () => {
                     <td className="py-3 text-sm text-slate-700">{formatDateDisplay(vehicle.dateOfUserAllocation)}</td>
                     <td className="py-3">
                       <div className="flex justify-end gap-2">
-                        <button onClick={() => handleEdit(vehicle)} className="btn-secondary px-3 py-1.5 text-xs">
+                        <button onClick={(event) => { event.stopPropagation(); handleEdit(vehicle); }} className="btn-secondary px-3 py-1.5 text-xs">
                           Edit
                         </button>
-                        <button onClick={() => openAssignmentModal(vehicle)} className="btn-primary px-3 py-1.5 text-xs whitespace-nowrap">
+                        <button onClick={(event) => { event.stopPropagation(); openAssignmentModal(vehicle); }} className="btn-primary px-3 py-1.5 text-xs whitespace-nowrap">
                           Change User
                         </button>
-                        <button onClick={() => handleDelete(vehicle)} className="btn-danger px-3 py-1.5 text-xs">
+                        <button onClick={(event) => { event.stopPropagation(); handleDelete(vehicle); }} className="btn-danger px-3 py-1.5 text-xs">
                           Delete
                         </button>
                       </div>
@@ -379,9 +432,10 @@ const VehicleManagement = () => {
         )}
       </div>
 
-      {isModalOpen && (
+      {isModalOpen && createPortal((
         <div
-          className="fixed inset-0 z-[100] flex items-center justify-center px-4 py-6 bg-slate-950/40 backdrop-blur-sm"
+          className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-950/80 px-4 py-6 backdrop-blur-md"
+          role="presentation"
         >
           <div className="bg-white rounded-xl shadow-2xl border border-slate-200 w-full max-w-2xl max-h-[calc(100vh-3rem)] overflow-hidden flex flex-col">
             <div className="shrink-0 px-6 py-4 border-b border-slate-200 flex items-center justify-between">
@@ -591,10 +645,10 @@ const VehicleManagement = () => {
             </form>
           </div>
         </div>
-      )}
+      ), document.body)}
 
-      {isAssignmentModalOpen && assignmentVehicle && (
-        <div className="fixed inset-0 z-[110] flex items-center justify-center px-4 py-6 bg-slate-950/40 backdrop-blur-sm">
+      {isAssignmentModalOpen && assignmentVehicle && createPortal((
+        <div className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-950/80 px-4 py-6 backdrop-blur-md" role="presentation">
           <div className="bg-white rounded-xl shadow-2xl border border-slate-200 w-full max-w-lg overflow-hidden">
             <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between gap-4">
               <div>
@@ -672,7 +726,84 @@ const VehicleManagement = () => {
             </form>
           </div>
         </div>
-      )}
+      ), document.body)}
+
+      {isHistoryModalOpen && historyVehicle && createPortal((
+        <div className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-950/80 px-4 py-6 backdrop-blur-md" role="presentation">
+          <div className="bg-white rounded-xl shadow-2xl border border-slate-200 w-full max-w-xl max-h-[calc(100vh-3rem)] overflow-hidden flex flex-col">
+            <div className="shrink-0 px-6 py-4 border-b border-slate-200 flex items-center justify-between gap-4">
+              <div>
+                <h3 className="text-lg font-semibold text-slate-900">Vehicle Allocation History</h3>
+                <p className="text-sm text-slate-500 mt-1">
+                  {historyVehicle.vehicleNumber} - {[historyVehicle.make, historyVehicle.name].filter(Boolean).join(' ') || 'Vehicle'}
+                </p>
+              </div>
+              <button onClick={closeHistoryModal} className="btn-secondary px-3 py-1.5 text-sm" type="button">
+                Close
+              </button>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5 space-y-6">
+              <section>
+                <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Current Owner / Drivers</h4>
+                {getCurrentAllocationEntries(historyVehicle).length === 0 ? (
+                  <p className="text-sm text-slate-500">No user or driver is currently allocated.</p>
+                ) : (
+                  <div className="divide-y divide-slate-100 border border-slate-200 rounded-lg">
+                    {getCurrentAllocationEntries(historyVehicle).map(entry => (
+                      <div key={entry._id || entry.user?._id} className="px-4 py-3 flex items-start justify-between gap-4">
+                        <div>
+                          <p className="text-sm font-semibold text-slate-900">{formatUserName(entry.user)}</p>
+                          <p className="text-xs text-slate-500 mt-1 capitalize">{entry.allocationType || historyVehicle.ownership}</p>
+                        </div>
+                        <p className="text-xs text-slate-500 text-right whitespace-nowrap">Allocated {formatDateTimeDisplay(entry.assignedAt)}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              <section>
+                <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Previous Owners / Drivers</h4>
+                {(historyVehicle.allocationHistory || []).filter(entry => entry.unassignedAt).length === 0 ? (
+                  <p className="text-sm text-slate-500">No previous allocation records.</p>
+                ) : (
+                  <div className="divide-y divide-slate-100 border border-slate-200 rounded-lg">
+                    {(historyVehicle.allocationHistory || [])
+                      .filter(entry => entry.unassignedAt)
+                      .sort((left, right) => new Date(right.unassignedAt) - new Date(left.unassignedAt))
+                      .map(entry => (
+                        <div key={entry._id} className="px-4 py-3 flex items-start justify-between gap-4">
+                          <div>
+                            <p className="text-sm font-semibold text-slate-900">{formatUserName(entry.user)}</p>
+                            <p className="text-xs text-slate-500 mt-1 capitalize">{entry.allocationType}</p>
+                          </div>
+                          <div className="text-xs text-slate-500 text-right whitespace-nowrap space-y-1">
+                            <p>Allocated {formatDateTimeDisplay(entry.assignedAt)}</p>
+                            <p>Changed {formatDateTimeDisplay(entry.unassignedAt)}</p>
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                )}
+              </section>
+            </div>
+          </div>
+        </div>
+      ), document.body)}
+
+      {deletingVehicle && createPortal((
+        <div className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-950/80 px-4 py-6 backdrop-blur-md" role="presentation">
+          <div className="bg-white rounded-xl shadow-2xl border border-slate-200 w-full max-w-md p-6">
+            <h3 className="text-lg font-semibold text-slate-900">Delete vehicle?</h3>
+            <p className="text-sm text-slate-500 mt-2">This will permanently remove vehicle {deletingVehicle.vehicleNumber} and its allocation records.</p>
+            <div className="flex justify-end gap-3 mt-6">
+              <button type="button" onClick={() => setDeletingVehicle(null)} className="btn-secondary">Cancel</button>
+              <button type="button" onClick={confirmDelete} className="btn-danger">Delete Vehicle</button>
+            </div>
+          </div>
+        </div>
+      ), document.body)}
     </div>
   );
 };

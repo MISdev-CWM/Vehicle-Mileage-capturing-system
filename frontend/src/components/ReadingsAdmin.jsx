@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import api from '../api';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -17,21 +18,6 @@ const StatBadge = ({ label, value, icon, accent = 'text-slate-900' }) => (
     </div>
   </div>
 );
-
-const ConfidencePill = ({ value }) => {
-  const pct = Math.round((value || 0) * 100);
-  const color =
-    pct >= 80
-      ? 'bg-emerald-100 text-emerald-700'
-      : pct >= 50
-      ? 'bg-amber-100 text-amber-700'
-      : 'bg-red-100 text-red-600';
-  return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${color}`}>
-      {pct}%
-    </span>
-  );
-};
 
 const CorrectedBadge = ({ value }) =>
   value ? (
@@ -57,9 +43,8 @@ function exportToCSV(readings) {
   const headers = [
     'Date',
     'Vehicle',
-    'Driver',
+    'User',
     'Mileage (km)',
-    'OCR Confidence (%)',
     'Corrected',
     'Original Mileage',
     'Submitted By',
@@ -67,12 +52,11 @@ function exportToCSV(readings) {
   const rows = readings.map(r => [
     new Date(r.readingDate).toLocaleString(),
     r.vehicleId,
-    r.driverName || '',
+    r.driverName ? `${r.driverName} (Driver)` : r.submittedByName || r.submittedBy,
     r.extractedMileage,
-    Math.round((r.ocrConfidence || 0) * 100),
     r.isCorrected ? 'Yes' : 'No',
     r.originalMileage ?? '',
-    r.submittedBy,
+    r.submittedByName || 'Unknown User',
   ]);
 
   const csv = [headers, ...rows]
@@ -91,12 +75,22 @@ function exportToCSV(readings) {
 // ─── Main Component ───────────────────────────────────────────────────────────
 const ReadingsAdmin = () => {
   const [readings, setReadings] = useState([]);
+  const [stats, setStats] = useState({
+    todayTotalReadings: 0,
+    allVehicleCount: 0,
+    allUserCount: 0,
+    todayCorrectedRecords: 0
+  });
   const [total, setTotal] = useState(0);
   const [pages, setPages] = useState(1);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [exporting, setExporting] = useState(false);
+  const [editingReading, setEditingReading] = useState(null);
+  const [editMileage, setEditMileage] = useState('');
+  const [deletingReading, setDeletingReading] = useState(null);
+  const [actionLoading, setActionLoading] = useState(false);
 
   // Filters
   const [vehicleFilter, setVehicleFilter] = useState('');
@@ -127,6 +121,12 @@ const ReadingsAdmin = () => {
       setTotal(res.data.total);
       setPages(res.data.pages);
       setPage(res.data.page);
+      setStats(res.data.stats || {
+        todayTotalReadings: 0,
+        allVehicleCount: 0,
+        allUserCount: 0,
+        todayCorrectedRecords: 0
+      });
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to load readings.');
     } finally {
@@ -156,6 +156,48 @@ const ReadingsAdmin = () => {
     setEndDate('');
   };
 
+  const openEditModal = (reading) => {
+    setEditingReading(reading);
+    setEditMileage(String(reading.extractedMileage ?? ''));
+    setError('');
+  };
+
+  const closeEditModal = () => {
+    setEditingReading(null);
+    setEditMileage('');
+  };
+
+  const handleUpdateReading = async (event) => {
+    event.preventDefault();
+    setActionLoading(true);
+    setError('');
+
+    try {
+      await api.put(`/readings/${editingReading._id}`, { mileage: Number(editMileage) });
+      closeEditModal();
+      await fetchReadings(page);
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to update reading');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleDeleteReading = async () => {
+    setActionLoading(true);
+    setError('');
+
+    try {
+      await api.delete(`/readings/${deletingReading._id}`);
+      setDeletingReading(null);
+      await fetchReadings(page);
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to delete reading');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   const handleExport = async () => {
     setExporting(true);
     try {
@@ -176,15 +218,6 @@ const ReadingsAdmin = () => {
       setExporting(false);
     }
   };
-
-  // Stats derived from current page
-  const correctedCount = readings.filter(r => r.isCorrected).length;
-  const uniqueVehicles = [...new Set(readings.map(r => r.vehicleId))].length;
-  const avgConfidence = readings.length
-    ? Math.round(
-        (readings.reduce((sum, r) => sum + (r.ocrConfidence || 0), 0) / readings.length) * 100
-      )
-    : 0;
 
   const startEntry = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
   const endEntry = Math.min(page * PAGE_SIZE, total);
@@ -260,8 +293,8 @@ const ReadingsAdmin = () => {
       {/* ── Stats Bar ── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatBadge
-          label="Total Readings"
-          value={total.toLocaleString()}
+          label="Today Total Readings"
+          value={stats.todayTotalReadings.toLocaleString()}
           accent="text-brand-700"
           icon={
             <svg className="w-5 h-5 text-brand-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -275,8 +308,8 @@ const ReadingsAdmin = () => {
           }
         />
         <StatBadge
-          label="Vehicles (this page)"
-          value={uniqueVehicles}
+          label="All Vehicles"
+          value={stats.allVehicleCount.toLocaleString()}
           accent="text-emerald-700"
           icon={
             <svg className="w-5 h-5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -296,8 +329,8 @@ const ReadingsAdmin = () => {
           }
         />
         <StatBadge
-          label="Corrected (this page)"
-          value={correctedCount}
+          label="All Users"
+          value={stats.allUserCount.toLocaleString()}
           accent="text-amber-700"
           icon={
             <svg className="w-5 h-5 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -311,8 +344,8 @@ const ReadingsAdmin = () => {
           }
         />
         <StatBadge
-          label="Avg OCR Confidence"
-          value={`${avgConfidence}%`}
+          label="Today Corrected Records"
+          value={stats.todayCorrectedRecords.toLocaleString()}
           accent="text-indigo-700"
           icon={
             <svg className="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -505,19 +538,16 @@ const ReadingsAdmin = () => {
                     Vehicle
                   </th>
                   <th className="text-left text-xs font-semibold text-slate-500 uppercase tracking-wider px-4 py-3">
-                    Driver
+                    User
                   </th>
                   <th className="text-right text-xs font-semibold text-slate-500 uppercase tracking-wider px-4 py-3">
                     Mileage
                   </th>
                   <th className="text-center text-xs font-semibold text-slate-500 uppercase tracking-wider px-4 py-3">
-                    OCR
-                  </th>
-                  <th className="text-center text-xs font-semibold text-slate-500 uppercase tracking-wider px-4 py-3">
                     Status
                   </th>
-                  <th className="text-left text-xs font-semibold text-slate-500 uppercase tracking-wider px-4 py-3 hidden lg:table-cell">
-                    Submitted By
+                  <th className="text-right text-xs font-semibold text-slate-500 uppercase tracking-wider px-4 py-3">
+                    Actions
                   </th>
                 </tr>
               </thead>
@@ -553,9 +583,9 @@ const ReadingsAdmin = () => {
                       </span>
                     </td>
 
-                    {/* Driver */}
+                    {/* User */}
                     <td className="px-4 py-3.5 text-sm text-slate-700 max-w-[10rem] truncate">
-                      {reading.driverName || <span className="text-slate-400">—</span>}
+                      {reading.driverName ? `${reading.driverName} (Driver)` : reading.submittedByName || reading.submittedBy || <span className="text-slate-400">—</span>}
                     </td>
 
                     {/* Mileage */}
@@ -571,19 +601,17 @@ const ReadingsAdmin = () => {
                       )}
                     </td>
 
-                    {/* OCR confidence */}
-                    <td className="px-4 py-3.5 text-center">
-                      <ConfidencePill value={reading.ocrConfidence} />
-                    </td>
-
                     {/* Status */}
                     <td className="px-4 py-3.5 text-center">
                       <CorrectedBadge value={reading.isCorrected} />
                     </td>
 
-                    {/* Submitted By */}
-                    <td className="px-4 py-3.5 text-xs text-slate-400 hidden lg:table-cell font-mono truncate max-w-[9rem]">
-                      {reading.submittedBy}
+                    {/* Actions */}
+                    <td className="px-4 py-3.5">
+                      <div className="flex justify-end gap-2">
+                        <button onClick={() => openEditModal(reading)} className="btn-secondary px-3 py-1.5 text-xs">Edit</button>
+                        <button onClick={() => setDeletingReading(reading)} className="btn-danger px-3 py-1.5 text-xs">Delete</button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -635,6 +663,45 @@ const ReadingsAdmin = () => {
           </div>
         )}
       </div>
+
+      {editingReading && createPortal(
+        <div className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-950/80 px-4 py-6 backdrop-blur-md" role="presentation">
+          <div className="bg-white rounded-xl shadow-2xl border border-slate-200 w-full max-w-md overflow-hidden">
+            <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between">
+              <div>
+                <h3 className="text-lg font-semibold text-slate-900">Edit Reading</h3>
+                <p className="text-xs text-slate-500 mt-1">{editingReading.vehicleId} · {new Date(editingReading.readingDate).toLocaleString()}</p>
+              </div>
+              <button type="button" onClick={closeEditModal} className="btn-secondary px-3 py-1.5 text-sm">Close</button>
+            </div>
+            <form onSubmit={handleUpdateReading} className="p-6 space-y-5">
+              <div>
+                <label htmlFor="editReadingMileage" className="block text-sm font-medium text-slate-700 mb-1.5">Mileage (km)</label>
+                <input id="editReadingMileage" type="number" min="0" step="1" value={editMileage} onChange={event => setEditMileage(event.target.value)} className="input" required />
+              </div>
+              <div className="flex justify-end gap-3">
+                <button type="button" onClick={closeEditModal} className="btn-secondary">Cancel</button>
+                <button type="submit" disabled={actionLoading} className="btn-primary">{actionLoading ? 'Updating...' : 'Update Reading'}</button>
+              </div>
+            </form>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {deletingReading && createPortal(
+        <div className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-950/80 px-4 py-6 backdrop-blur-md" role="presentation">
+          <div className="bg-white rounded-xl shadow-2xl border border-slate-200 w-full max-w-md p-6">
+            <h3 className="text-lg font-semibold text-slate-900">Delete reading?</h3>
+            <p className="text-sm text-slate-500 mt-2">This will permanently remove the {deletingReading.vehicleId} reading of {deletingReading.extractedMileage?.toLocaleString()} km.</p>
+            <div className="flex justify-end gap-3 mt-6">
+              <button type="button" onClick={() => setDeletingReading(null)} className="btn-secondary">Cancel</button>
+              <button type="button" onClick={handleDeleteReading} disabled={actionLoading} className="btn-danger">{actionLoading ? 'Deleting...' : 'Delete Reading'}</button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   );
 };
