@@ -51,17 +51,19 @@ const seedDefaultUsers = async () => {
   ];
 
   for (const user of defaults) {
-    const existingUser = await User.findOne({ email: user.email });
+    // Each of these fields has a unique index. A previous deployment may have
+    // created the default account with a different email, so checking only the
+    // email can cause a duplicate-key error for its username or employee ID.
+    const existingUser = await User.findOne({
+      $or: [
+        { email: user.email },
+        { username: user.username },
+        { employeeId: user.employeeId }
+      ]
+    });
 
     if (existingUser) {
-      existingUser.employeeId = existingUser.employeeId || user.employeeId;
-      existingUser.username = existingUser.username || user.username;
-      existingUser.contactNumber = existingUser.contactNumber || user.contactNumber;
-      existingUser.vehicleId = existingUser.vehicleId || user.vehicleId;
-      if (user.role === 'user' && existingUser.role !== 'admin') {
-        existingUser.role = 'user';
-      }
-      await existingUser.save();
+      console.log(`Default ${user.role} account already exists; skipping seed.`);
       continue;
     }
 
