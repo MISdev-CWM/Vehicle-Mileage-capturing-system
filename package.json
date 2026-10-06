@@ -1,0 +1,11 @@
+{
+  "name": "vehicle-mileage-capturing-system",
+  "private": true,
+  "scripts": {
+    "postinstall": "npm --prefix backend ci",
+    "start": "npm --prefix backend start"
+  },
+  "engines": {
+    "node": ">=20.19.0"
+  }
+}
