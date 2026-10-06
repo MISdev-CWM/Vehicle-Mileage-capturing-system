@@ -12,7 +12,22 @@ const { authenticate, authorizeRoles } = require('../middleware/auth');
 // CRITICAL: Store file in memory only, never on disk
 const upload = multer({ storage: multer.memoryStorage() });
 
-const OCR_SERVICE_URL = process.env.OCR_SERVICE_URL || 'http://localhost:8000';
+const getOcrExtractUrl = () => {
+  const configuredUrl = (process.env.OCR_SERVICE_URL || 'http://localhost:8000').trim();
+
+  let baseUrl;
+  try {
+    baseUrl = new URL(configuredUrl);
+  } catch {
+    throw new Error('OCR_SERVICE_URL must be an absolute http:// or https:// URL.');
+  }
+
+  if (!['http:', 'https:'].includes(baseUrl.protocol)) {
+    throw new Error('OCR_SERVICE_URL must use http:// or https://.');
+  }
+
+  return new URL('extract', `${baseUrl.href.replace(/\/+$/, '')}/`).href;
+};
 
 router.use(authenticate);
 
@@ -45,7 +60,7 @@ router.post('/extract', upload.single('meterImage'), async (req, res) => {
       contentType: req.file.mimetype
     });
 
-    const ocrResponse = await axios.post(`${OCR_SERVICE_URL}/extract`, form, {
+    const ocrResponse = await axios.post(getOcrExtractUrl(), form, {
       headers: form.getHeaders(),
       timeout: 30000  // OCR can be slow on first run
     });
@@ -73,7 +88,8 @@ router.post('/extract', upload.single('meterImage'), async (req, res) => {
 
   } catch (error) {
     console.error('OCR forwarding error:', error.message);
-    res.status(500).json({ 
+    const isConfigurationError = error.message.startsWith('OCR_SERVICE_URL');
+    res.status(isConfigurationError ? 500 : 502).json({
       error: 'OCR service unavailable',
       detail: error.message 
     });
