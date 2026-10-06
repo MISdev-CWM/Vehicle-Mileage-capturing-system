@@ -1,5 +1,6 @@
 ﻿from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+import os
 import PIL.Image
 # Pillow 10+ removed ANTIALIAS -- restore as alias for LANCZOS so EasyOCR works
 if not hasattr(PIL.Image, 'ANTIALIAS'):
@@ -334,4 +335,4 @@ async def health():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
