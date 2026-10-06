@@ -9,6 +9,7 @@ const app = express();
 
 const allowedOrigins = new Set([
   'https://vehicle-mileage-capturing-system.vercel.app',
+  'http://localhost:5173',
   ...(process.env.CLIENT_URLS || process.env.CLIENT_URL || '')
     .split(',')
     .map(origin => origin.trim())
@@ -17,11 +18,8 @@ const allowedOrigins = new Set([
 
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.has(origin)) {
-      return callback(null, true);
-    }
-
-    return callback(new Error('Origin is not allowed by CORS'));
+    // Allow non-browser requests (no Origin header) and whitelisted origins
+    callback(null, !origin || allowedOrigins.has(origin));
   },
   methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
