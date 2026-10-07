@@ -80,11 +80,6 @@ const LoginPage = ({ onLogin }) => {
           >
             {loading ? 'Signing in...' : 'Sign In'}
           </button>
-
-          <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs text-slate-500">
-            <p><span className="font-semibold text-slate-700">Admin:</span> admin / admin123</p>
-            <p className="mt-1"><span className="font-semibold text-slate-700">Employee:</span> employee / user123</p>
-          </div>
         </form>
       </div>
     </div>

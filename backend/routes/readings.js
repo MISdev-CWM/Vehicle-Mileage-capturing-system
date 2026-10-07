@@ -12,6 +12,8 @@ const { authenticate, authorizeRoles } = require('../middleware/auth');
 // CRITICAL: Store file in memory only, never on disk
 const upload = multer({ storage: multer.memoryStorage() });
 
+const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 const getOcrExtractUrl = () => {
   const configuredUrl = (process.env.OCR_SERVICE_URL || 'http://localhost:8000').trim();
 
@@ -148,12 +150,26 @@ router.post('/', async (req, res) => {
 // GET /api/readings — All readings (admin, filterable + paginated)
 router.get('/', async (req, res) => {
   try {
-    const { vehicleId, driverName, startDate, endDate, page = 1 } = req.query;
+    const { vehicleId, driverName, userKey, startDate, endDate, page = 1 } = req.query;
     const PAGE_SIZE = 50;
 
     const filter = {};
     if (vehicleId) filter.vehicleId = { $regex: vehicleId.trim(), $options: 'i' };
     if (driverName) filter.driverName = { $regex: driverName.trim(), $options: 'i' };
+    if (userKey) {
+      const [type, ...valueParts] = userKey.split(':');
+      const value = valueParts.join(':').trim();
+
+      if (type === 'user' && value) {
+        // New readings store the authenticated user's id in submittedBy.
+        filter.submittedBy = value;
+      }
+
+      if (type === 'driver' && value) {
+        // Company-driver readings are identified by the driver name selected at capture time.
+        filter.driverName = { $regex: `^${escapeRegex(value)}$`, $options: 'i' };
+      }
+    }
     if (startDate || endDate) {
       filter.readingDate = {};
       if (startDate) filter.readingDate.$gte = new Date(startDate);

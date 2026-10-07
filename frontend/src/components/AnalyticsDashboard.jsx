@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import api from '../api';
 
 const formatNumber = (value) => Math.round(value || 0).toLocaleString();
@@ -31,7 +31,26 @@ const formatReportDate = (value) => {
   });
 };
 
-const getDateInputValue = (date) => date.toISOString().slice(0, 10);
+const formatReadingTime = (value) => {
+  if (!value) {
+    return '-';
+  }
+
+  return new Date(value).toLocaleString(undefined, {
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+};
+
+const getDateInputValue = (date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+
+  return `${year}-${month}-${day}`;
+};
 
 const PERIODS = [
   { value: 'daily', label: 'Daily' },
@@ -263,50 +282,39 @@ const AnalyticsDashboard = () => {
   const [driverSelection, setDriverSelection] = useState(() => getDefaultSelection());
   const [leaderboardSelection, setLeaderboardSelection] = useState(() => getDefaultSelection());
 
-  const fetchAnalytics = async () => {
-    setLoading(true);
-    setError('');
+  const fetchAnalytics = useCallback(async ({ background = false } = {}) => {
+    if (!background) {
+      setLoading(true);
+      setError('');
+    }
 
     try {
       const res = await api.get('/admin/analytics');
       setAnalytics(res.data);
     } catch (err) {
-      setError(err.response?.data?.error || 'Failed to load analytics');
+      if (!background) {
+        setError(err.response?.data?.error || 'Failed to load analytics');
+      }
     } finally {
-      setLoading(false);
+      if (!background) {
+        setLoading(false);
+      }
     }
-  };
+  }, []);
 
   useEffect(() => {
-    let isActive = true;
+    fetchAnalytics();
+    const refreshTimer = window.setInterval(() => fetchAnalytics({ background: true }), 15000);
 
-    const loadInitialData = async () => {
-      try {
-        const res = await api.get('/admin/analytics');
-
-        if (isActive) {
-          setAnalytics(res.data);
-        }
-      } catch (err) {
-        if (isActive) {
-          setError(err.response?.data?.error || 'Failed to load analytics');
-        }
-      } finally {
-        if (isActive) {
-          setLoading(false);
-        }
-      }
-    };
-
-    loadInitialData();
-
-    return () => {
-      isActive = false;
-    };
-  }, []);
+    return () => window.clearInterval(refreshTimer);
+  }, [fetchAnalytics]);
 
   const kpis = analytics?.kpis || {};
   const driverVehicleUsage = analytics?.driverVehicleUsage || [];
+  const currentVehicleMileage = useMemo(() => (
+    [...(analytics?.vehicleUsage || [])]
+      .sort((left, right) => left.vehicleNumber.localeCompare(right.vehicleNumber))
+  ), [analytics]);
   const userDailyUsage = useMemo(() => analytics?.userDailyUsage || [], [analytics]);
   const reportRows = useMemo(() => filterRowsBySelection(userDailyUsage, reportSelection), [userDailyUsage, reportSelection]);
   const periodUsage = reportRows;
@@ -417,7 +425,7 @@ const AnalyticsDashboard = () => {
           <p className="text-xs text-slate-400">
             Updated {analytics?.generatedAt ? new Date(analytics.generatedAt).toLocaleString() : '-'}
           </p>
-          <button onClick={fetchAnalytics} className="btn-secondary self-start sm:self-auto">
+          <button onClick={() => fetchAnalytics()} className="btn-secondary self-start sm:self-auto">
             <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582M20 20v-5h-.581M5.635 15A8 8 0 1118.364 8.636" />
             </svg>
@@ -462,6 +470,43 @@ const AnalyticsDashboard = () => {
           }
         />
       </div>
+
+      <section className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+        <div className="px-6 py-5 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" aria-hidden="true" />
+              <h3 className="text-lg font-semibold text-slate-950">Current vehicle mileage</h3>
+            </div>
+            <p className="text-sm text-slate-500 mt-1">Latest odometer value and last reading time for every registered vehicle.</p>
+          </div>
+          <span className="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-full px-3 py-1.5">
+            Refreshes every 15 seconds
+          </span>
+        </div>
+
+        {currentVehicleMileage.length === 0 ? (
+          <EmptyState title="No registered vehicles" text="Registered vehicles will appear here automatically." />
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-px bg-slate-100">
+            {currentVehicleMileage.map(vehicle => (
+              <article key={vehicle.vehicleNumber} className="bg-white p-5">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="font-mono text-sm font-bold text-brand-700 truncate">{vehicle.vehicleNumber}</p>
+                    <p className="text-xs text-slate-500 mt-1 truncate">{[vehicle.make, vehicle.name, vehicle.model].filter(Boolean).join(' ') || 'Vehicle details unavailable'}</p>
+                  </div>
+                  <span className={`shrink-0 rounded px-2 py-1 text-[11px] font-semibold ${vehicle.status === 'active' ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
+                    {vehicle.status || 'unknown'}
+                  </span>
+                </div>
+                <p className="text-2xl font-bold text-slate-950 mt-4">{vehicle.lastMileage == null ? 'No reading' : formatKm(vehicle.lastMileage)}</p>
+                <p className="text-xs text-slate-500 mt-1">{vehicle.lastReadingDate ? `Last reading: ${formatReadingTime(vehicle.lastReadingDate)}` : 'No reading submitted yet'}</p>
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
 
       <section className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
         <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-6">
@@ -511,7 +556,7 @@ const AnalyticsDashboard = () => {
           <EmptyState title="No daily usage yet" text="Consecutive daily readings for the same user and vehicle are required." />
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[1040px]">
+            <table className="w-full min-w-[1180px]">
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-200">
                   <th className="px-6 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">User / Driver</th>
@@ -519,6 +564,8 @@ const AnalyticsDashboard = () => {
                   <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Selected Period</th>
                   <th className="px-4 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">Period km</th>
                   <th className="px-4 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">Days</th>
+                  <th className="px-4 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">Current mileage</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Latest attempt</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Recent Daily Usage</th>
                 </tr>
               </thead>
@@ -540,6 +587,8 @@ const AnalyticsDashboard = () => {
                     </td>
                     <td className="px-4 py-4 text-right font-mono text-sm font-semibold text-slate-900">{formatKm(usage.periodDistance)}</td>
                     <td className="px-4 py-4 text-right font-mono text-sm font-semibold text-slate-900">{formatNumber(usage.dailyUsage.length)}</td>
+                    <td className="px-4 py-4 text-right font-mono text-sm font-bold text-emerald-700">{usage.currentMileage === null ? '-' : formatKm(usage.currentMileage)}</td>
+                    <td className="px-4 py-4 text-xs text-slate-600 whitespace-nowrap">{formatReadingTime(usage.currentReadingAt)}</td>
                     <td className="px-4 py-4">
                       <div className="flex flex-wrap gap-1.5 max-w-sm">
                         {usage.dailyUsage.map(day => (

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import api from '../api';
+import VehicleUsage from './VehicleUsage';
 
 const emptyForm = {
   vehicleNumber: '',
@@ -78,8 +79,10 @@ const VehicleManagement = () => {
   const [isAssignmentModalOpen, setIsAssignmentModalOpen] = useState(false);
   const [assignmentVehicle, setAssignmentVehicle] = useState(null);
   const [assignmentForm, setAssignmentForm] = useState(emptyAssignmentForm);
+  const [reassignmentConflict, setReassignmentConflict] = useState(null);
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
   const [historyVehicle, setHistoryVehicle] = useState(null);
+  const [isVehicleUsageOpen, setIsVehicleUsageOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -201,6 +204,7 @@ const VehicleManagement = () => {
     });
     setError('');
     setSuccess('');
+    setReassignmentConflict(null);
     setIsAssignmentModalOpen(true);
   };
 
@@ -208,6 +212,7 @@ const VehicleManagement = () => {
     setAssignmentVehicle(null);
     setAssignmentForm(emptyAssignmentForm);
     setError('');
+    setReassignmentConflict(null);
     setIsAssignmentModalOpen(false);
   };
 
@@ -221,8 +226,7 @@ const VehicleManagement = () => {
     setIsHistoryModalOpen(false);
   };
 
-  const handleAssignmentSubmit = async (e) => {
-    e.preventDefault();
+  const saveAssignment = async (confirmReassignment = false) => {
 
     if (!assignmentVehicle) {
       return;
@@ -235,16 +239,31 @@ const VehicleManagement = () => {
     try {
       await api.patch(`/vehicles/${assignmentVehicle._id}/assignment`, {
         allocatedUser: assignmentForm.ownership === 'personal' ? (assignmentForm.allocatedUser || null) : null,
-        allocatedDrivers: assignmentForm.ownership === 'company' ? assignmentForm.allocatedDrivers : []
+        allocatedDrivers: assignmentForm.ownership === 'company' ? assignmentForm.allocatedDrivers : [],
+        confirmReassignment
       });
       closeAssignmentModal();
       setSuccess('Vehicle user assignment changed successfully');
       await fetchVehicles();
     } catch (err) {
+      if (err.response?.status === 409 && err.response?.data?.code === 'USER_ALREADY_ASSIGNED') {
+        setReassignmentConflict(err.response.data);
+        return;
+      }
       setError(err.response?.data?.error || 'Failed to change vehicle user');
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleAssignmentSubmit = async (e) => {
+    e.preventDefault();
+    await saveAssignment();
+  };
+
+  const confirmReassignment = async () => {
+    setReassignmentConflict(null);
+    await saveAssignment(true);
   };
 
   const handleSubmit = async (e) => {
@@ -322,6 +341,10 @@ const VehicleManagement = () => {
     fetchVehicles(search.trim());
   };
 
+  if (isVehicleUsageOpen) {
+    return <VehicleUsage onBack={() => setIsVehicleUsageOpen(false)} />;
+  }
+
   return (
     <div className="space-y-8">
       <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
@@ -330,6 +353,9 @@ const VehicleManagement = () => {
           <p className="text-sm text-slate-500 mt-1">Create, view, update, delete, and allocate vehicles.</p>
         </div>
         <div className="flex gap-3">
+          <button onClick={() => setIsVehicleUsageOpen(true)} className="btn-secondary self-start sm:self-auto">
+            Vehicle Usage
+          </button>
           <button onClick={openCreateModal} className="btn-primary self-start sm:self-auto">
             Create Vehicle
           </button>
@@ -407,7 +433,7 @@ const VehicleManagement = () => {
                         ? (vehicle.allocatedDrivers?.length
                             ? vehicle.allocatedDrivers.map(driver => driver.name).join(', ')
                             : '-')
-                        : (vehicle.allocatedUser ? `${vehicle.allocatedUser.name} (${vehicle.allocatedUser.username})` : '-')}
+                        : (vehicle.allocatedUser?.name || '-')}
                     </td>
                     <td className="py-3 text-sm text-slate-700">{formatDateDisplay(vehicle.dateOfPurchasing)}</td>
                     <td className="py-3 text-sm text-slate-700">{formatDateDisplay(vehicle.dateOfUserAllocation)}</td>
@@ -570,7 +596,7 @@ const VehicleManagement = () => {
                             <option value="">Unassigned</option>
                             {assignableUsers.map(user => (
                               <option key={user._id} value={user._id}>
-                                {user.employeeId ? `${user.employeeId} - ` : ''}{user.name} ({user.username})
+                                {user.employeeId ? `${user.employeeId} - ` : ''}{user.name}
                               </option>
                             ))}
                           </select>
@@ -673,13 +699,17 @@ const VehicleManagement = () => {
                     <label className="block text-sm font-medium text-slate-700 mb-1.5">Allocated User</label>
                     <select
                       value={assignmentForm.allocatedUser}
-                      onChange={(e) => setAssignmentForm(prev => ({ ...prev, allocatedUser: e.target.value }))}
+                      onChange={(e) => {
+                        setAssignmentForm(prev => ({ ...prev, allocatedUser: e.target.value }));
+                        setReassignmentConflict(null);
+                        setError('');
+                      }}
                       className="input"
                     >
                       <option value="">Unassigned</option>
                       {assignableUsers.map(user => (
                         <option key={user._id} value={user._id}>
-                          {user.employeeId ? `${user.employeeId} - ` : ''}{user.name} ({user.username})
+                          {user.employeeId ? `${user.employeeId} - ` : ''}{user.name}
                         </option>
                       ))}
                     </select>
@@ -724,6 +754,40 @@ const VehicleManagement = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      ), document.body)}
+
+      {reassignmentConflict && assignmentVehicle && createPortal((
+        <div className="fixed inset-0 z-[2147483648] flex items-center justify-center bg-slate-950/80 px-4 py-6 backdrop-blur-md" role="dialog" aria-modal="true" aria-labelledby="reassign-user-title">
+          <div className="bg-white rounded-xl shadow-2xl border border-slate-200 w-full max-w-md overflow-hidden">
+            <div className="px-6 py-5">
+              <h3 id="reassign-user-title" className="text-lg font-semibold text-slate-900">Move user to this vehicle?</h3>
+              <p className="text-sm text-slate-600 mt-3 leading-6">
+                <span className="font-semibold text-slate-900">
+                  {formatUserName(assignableUsers.find(user => user._id === assignmentForm.allocatedUser))}
+                </span>{' '}
+                is currently assigned to{' '}
+                <span className="font-semibold text-slate-900">{reassignmentConflict.currentVehicle?.vehicleNumber}</span>.
+              </p>
+              <p className="text-sm text-slate-600 mt-2 leading-6">
+                If you continue, that vehicle will become unassigned and the user will be assigned to{' '}
+                <span className="font-semibold text-slate-900">{assignmentVehicle.vehicleNumber}</span>.
+              </p>
+            </div>
+            <div className="border-t border-slate-200 px-6 py-4 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setReassignmentConflict(null)}
+                disabled={saving}
+                className="btn-secondary"
+              >
+                Cancel
+              </button>
+              <button type="button" onClick={confirmReassignment} disabled={saving} className="btn-primary">
+                {saving ? 'Updating...' : 'Confirm Reassignment'}
+              </button>
+            </div>
           </div>
         </div>
       ), document.body)}
