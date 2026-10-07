@@ -12,6 +12,7 @@ const MeterCapture = ({ vehicleId, driverName }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(false);
+  const [hasAnalyzedImage, setHasAnalyzedImage] = useState(false);
   
   const [formData, setFormData] = useState({
     mileage: '',
@@ -90,6 +91,7 @@ const MeterCapture = ({ vehicleId, driverName }) => {
         isCorrected: false,
         originalMileage: extracted.mileage
       });
+      setHasAnalyzedImage(true);
     } catch (err) {
       const msg = err.response?.data?.suggestion || err.response?.data?.error || 'Analysis failed. Please try again.';
       setError(msg);
@@ -147,6 +149,7 @@ const MeterCapture = ({ vehicleId, driverName }) => {
     setCapturedImage(null);
     setPreviewUrl(null);
     setFormData({ mileage: '', confidence: 0, rawText: '', isCorrected: false, originalMileage: null });
+    setHasAnalyzedImage(false);
     setError(null);
     if (mode === 'camera') {
       navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
@@ -252,7 +255,7 @@ const MeterCapture = ({ vehicleId, driverName }) => {
       )}
 
       {/* Preview & Analyze */}
-      {capturedImage && !formData.mileage && (
+      {capturedImage && !hasAnalyzedImage && (
         <div className="space-y-4">
           <div className="relative rounded-xl overflow-hidden bg-slate-900 aspect-[4/3]">
             <img src={previewUrl} alt="Captured" className="w-full h-full object-contain" />
@@ -309,7 +312,7 @@ const MeterCapture = ({ vehicleId, driverName }) => {
       )}
 
       {/* Verification Form */}
-      {formData.mileage && (
+      {hasAnalyzedImage && (
         <div className="card space-y-5 animate-in fade-in slide-in-from-bottom-4 duration-500">
           <div className="flex items-center justify-between">
             <h3 className="text-lg font-semibold text-slate-900">Verify Reading</h3>

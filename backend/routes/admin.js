@@ -131,14 +131,6 @@ const calendarDateKey = (value) => {
   return `${getPart('year')}-${getPart('month')}-${getPart('day')}`;
 };
 
-const addCalendarDays = (dateKey, days) => {
-  const [year, month, day] = dateKey.split('-').map(Number);
-  const date = new Date(Date.UTC(year, month - 1, day));
-  date.setUTCDate(date.getUTCDate() + days);
-
-  return date.toISOString().slice(0, 10);
-};
-
 const weekKey = (dateKey) => {
   const [year, month, day] = dateKey.split('-').map(Number);
   const date = new Date(Date.UTC(year, month - 1, day));
@@ -148,8 +140,8 @@ const weekKey = (dateKey) => {
   return date.toISOString().slice(0, 10);
 };
 
-const createDriverVehicleUsage = (readings, userMap) => {
-  const usageMap = new Map();
+const createVehicleAssignmentSessions = (readings, userMap) => {
+  const readingsByVehicle = new Map();
 
   readings.forEach(reading => {
     const vehicleNumber = reading.vehicleId?.toUpperCase();
@@ -159,63 +151,117 @@ const createDriverVehicleUsage = (readings, userMap) => {
       return;
     }
 
-    const operator = createOperatorAnalyticsRow(reading, userMap);
-    const key = `${operator.key}:${vehicleNumber}`;
-    const day = calendarDateKey(readingDate);
-
-    if (!usageMap.has(key)) {
-      usageMap.set(key, {
-        key,
-        operator,
-        vehicleNumber,
-        firstReadings: new Map()
-      });
-    }
-
-    const usage = usageMap.get(key);
-    const firstReading = usage.firstReadings.get(day);
-
-    if (!firstReading || readingDate < firstReading.readingDate) {
-      usage.firstReadings.set(day, {
-        mileage: reading.extractedMileage,
-        confidence: reading.ocrConfidence,
-        readingDate
-      });
-    }
+    const entry = {
+      reading,
+      readingDate,
+      vehicleNumber,
+      operator: createOperatorAnalyticsRow(reading, userMap)
+    };
+    const vehicleReadings = readingsByVehicle.get(vehicleNumber) || [];
+    vehicleReadings.push(entry);
+    readingsByVehicle.set(vehicleNumber, vehicleReadings);
   });
 
+  return Array.from(readingsByVehicle.values()).flatMap(vehicleReadings => {
+    const sessions = [];
+    let currentSession = null;
+
+    vehicleReadings
+      .sort((left, right) => left.readingDate - right.readingDate)
+      .forEach(entry => {
+        // A different submitter marks a vehicle handover. Starting a new
+        // session prevents us from assigning another user's mileage to the
+        // previous user when that vehicle is later reassigned.
+        if (!currentSession || currentSession.operator.key !== entry.operator.key) {
+          currentSession = {
+            key: `${entry.operator.key}:${entry.vehicleNumber}:session:${sessions.length + 1}`,
+            operator: entry.operator,
+            userId: entry.reading.submittedBy || '',
+            vehicleNumber: entry.vehicleNumber,
+            firstReadings: new Map(),
+            latestReading: null
+          };
+          sessions.push(currentSession);
+        }
+
+        const day = calendarDateKey(entry.readingDate);
+        const firstReading = currentSession.firstReadings.get(day);
+
+        if (!firstReading || entry.readingDate < firstReading.readingDate) {
+          currentSession.firstReadings.set(day, {
+            mileage: entry.reading.extractedMileage,
+            confidence: entry.reading.ocrConfidence,
+            readingDate: entry.readingDate
+          });
+        }
+
+        if (!currentSession.latestReading || entry.readingDate > currentSession.latestReading.readingDate) {
+          currentSession.latestReading = {
+            mileage: entry.reading.extractedMileage,
+            readingDate: entry.readingDate
+          };
+        }
+      });
+
+    return sessions;
+  });
+};
+
+const createSessionDailyUsage = (firstReadings) => {
+  const days = Array.from(firstReadings.keys()).sort();
+
+  return days.flatMap((day, index) => {
+    const nextDay = days[index + 1];
+    const start = firstReadings.get(day);
+    const end = firstReadings.get(nextDay);
+
+    if (!end) {
+      return [];
+    }
+
+    const distance = end.mileage - start.mileage;
+    if (distance < 0) {
+      return [];
+    }
+
+    return [{
+      date: day,
+      nextDate: nextDay,
+      startMileage: start.mileage,
+      endMileage: end.mileage,
+      confidence: start.confidence,
+      distance: Math.round(distance)
+    }];
+  });
+};
+
+const createDriverVehicleUsage = (readings, userMap) => {
+  const usageMap = new Map();
   const today = calendarDateKey(new Date());
   const currentWeek = weekKey(today);
   const currentMonth = today.slice(0, 7);
 
+  createVehicleAssignmentSessions(readings, userMap).forEach(session => {
+    const key = `${session.operator.key}:${session.vehicleNumber}`;
+    const usage = usageMap.get(key) || {
+      key,
+      operator: session.operator,
+      vehicleNumber: session.vehicleNumber,
+      allDailyUsage: [],
+      latestReading: null
+    };
+
+    usage.allDailyUsage.push(...createSessionDailyUsage(session.firstReadings));
+    if (!usage.latestReading || session.latestReading.readingDate > usage.latestReading.readingDate) {
+      usage.latestReading = session.latestReading;
+    }
+    usageMap.set(key, usage);
+  });
+
   return Array.from(usageMap.values())
     .map(usage => {
-      const dailyUsage = Array.from(usage.firstReadings.keys())
-        .sort()
-        .flatMap(day => {
-          const nextDay = addCalendarDays(day, 1);
-          const firstReading = usage.firstReadings.get(day);
-          const nextDayFirstReading = usage.firstReadings.get(nextDay);
-
-          if (!nextDayFirstReading) {
-            return [];
-          }
-
-          const distance = nextDayFirstReading.mileage - firstReading.mileage;
-
-          if (distance < 0) {
-            return [];
-          }
-
-          return [{
-            date: day,
-            nextDate: nextDay,
-            startMileage: firstReading.mileage,
-            endMileage: nextDayFirstReading.mileage,
-            distance: Math.round(distance)
-          }];
-        });
-      const latestDailyUsage = dailyUsage.at(-1) || null;
+      const allDailyUsage = usage.allDailyUsage.sort((left, right) => left.date.localeCompare(right.date));
+      const latestDailyUsage = allDailyUsage.at(-1) || null;
 
       return {
         key: usage.key,
@@ -224,18 +270,20 @@ const createDriverVehicleUsage = (readings, userMap) => {
         username: usage.operator.username,
         role: usage.operator.role,
         vehicleNumber: usage.vehicleNumber,
+        currentMileage: usage.latestReading?.mileage ?? null,
+        currentReadingAt: usage.latestReading?.readingDate ?? null,
         latestDailyUsage,
-        weekDistance: Math.round(dailyUsage
+        weekDistance: Math.round(allDailyUsage
           .filter(day => weekKey(day.date) === currentWeek)
           .reduce((total, day) => total + day.distance, 0)),
-        monthDistance: Math.round(dailyUsage
+        monthDistance: Math.round(allDailyUsage
           .filter(day => day.date.startsWith(currentMonth))
           .reduce((total, day) => total + day.distance, 0)),
-        allDailyUsage: dailyUsage,
-        dailyUsage: dailyUsage.slice(-7).reverse()
+        allDailyUsage,
+        dailyUsage: allDailyUsage.slice(-7).reverse()
       };
     })
-    .filter(usage => usage.latestDailyUsage)
+    .filter(usage => usage.latestDailyUsage || usage.currentMileage !== null)
     .sort((left, right) => (
       right.monthDistance - left.monthDistance ||
       right.weekDistance - left.weekDistance ||
@@ -244,77 +292,19 @@ const createDriverVehicleUsage = (readings, userMap) => {
     ));
 };
 
-const createUserDailyUsage = (readings, userMap) => {
-  const usageMap = new Map();
-
-  readings.forEach(reading => {
-    const vehicleNumber = reading.vehicleId?.toUpperCase();
-    const readingDate = new Date(reading.readingDate);
-
-    if (!vehicleNumber || !reading.submittedBy || Number.isNaN(readingDate.getTime())) {
-      return;
-    }
-
-    const key = `user:${reading.submittedBy}:${vehicleNumber}`;
-    const day = calendarDateKey(readingDate);
-
-    if (!usageMap.has(key)) {
-      usageMap.set(key, {
-        key,
-        userId: reading.submittedBy,
-        vehicleNumber,
-        firstReadings: new Map()
-      });
-    }
-
-    const usage = usageMap.get(key);
-    const firstReading = usage.firstReadings.get(day);
-
-    if (!firstReading || readingDate < firstReading.readingDate) {
-      usage.firstReadings.set(day, {
-        mileage: reading.extractedMileage,
-        confidence: reading.ocrConfidence,
-        readingDate
-      });
-    }
-  });
-
-  return Array.from(usageMap.values()).flatMap(usage => {
-    const user = userMap.get(usage.userId);
-    const days = Array.from(usage.firstReadings.keys()).sort();
-
-    return days.flatMap(day => {
-      const nextDay = addCalendarDays(day, 1);
-      const start = usage.firstReadings.get(day);
-      const end = usage.firstReadings.get(nextDay);
-
-      if (!end) {
-        return [];
-      }
-
-      const distance = end.mileage - start.mileage;
-
-      if (distance < 0) {
-        return [];
-      }
-
-      return [{
-        key: `${usage.key}:${day}`,
-        userId: usage.userId,
-        name: user?.name || user?.username || 'Unknown User',
-        employeeId: user?.employeeId || '',
-        username: user?.username || '',
-        role: user?.role || 'user',
-        vehicleNumber: usage.vehicleNumber,
-        date: day,
-        startMileage: start.mileage,
-        endMileage: end.mileage,
-        confidence: start.confidence,
-        distance: Math.round(distance)
-      }];
-    });
-  }).sort((left, right) => right.date.localeCompare(left.date) || left.name.localeCompare(right.name));
-};
+const createUserDailyUsage = (readings, userMap) => createVehicleAssignmentSessions(readings, userMap)
+  .filter(session => session.operator.key.startsWith('user:') && session.userId)
+  .flatMap(session => createSessionDailyUsage(session.firstReadings).map(day => ({
+    key: `${session.key}:${day.date}`,
+    userId: session.userId,
+    name: session.operator.name,
+    employeeId: session.operator.employeeId,
+    username: session.operator.username,
+    role: session.operator.role,
+    vehicleNumber: session.vehicleNumber,
+    ...day
+  })))
+  .sort((left, right) => right.date.localeCompare(left.date) || left.name.localeCompare(right.name));
 
 router.get('/analytics', async (req, res) => {
   try {

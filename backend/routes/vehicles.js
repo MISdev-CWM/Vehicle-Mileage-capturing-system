@@ -25,7 +25,7 @@ const normalizeVehicleInput = (body) => ({
   dateOfUserAllocation: toDateOrNull(body.dateOfUserAllocation)
 });
 
-const validateVehicle = async (payload, validateAllocation = true) => {
+const validateVehicle = async (payload, validateAllocation = true, validateGeneratedUsername = true) => {
   if (!payload.vehicleNumber || !payload.make || !payload.name || !payload.model || !payload.engineCapacity || !payload.manufacturingYear) {
     return 'Vehicle number, make, name, model, engine capacity, and manufacturing year are required';
   }
@@ -45,19 +45,21 @@ const validateVehicle = async (payload, validateAllocation = true) => {
       return 'Allocated user must be an active user-role account';
     }
 
-    const generatedUsername = usernameFromVehicleNumber(payload.vehicleNumber);
+    if (validateGeneratedUsername) {
+      const generatedUsername = usernameFromVehicleNumber(payload.vehicleNumber);
 
-    if (!generatedUsername) {
-      return 'Vehicle number must contain at least one letter or number';
-    }
+      if (!generatedUsername) {
+        return 'Vehicle number must contain at least one letter or number';
+      }
 
-    const usernameOwner = await User.findOne({
-      username: generatedUsername,
-      _id: { $ne: payload.allocatedUser }
-    }).select('_id');
+      const usernameOwner = await User.findOne({
+        username: generatedUsername,
+        _id: { $ne: payload.allocatedUser }
+      }).select('_id');
 
-    if (usernameOwner) {
-      return `Generated username "${generatedUsername}" is already used by another account`;
+      if (usernameOwner) {
+        return `Generated username "${generatedUsername}" is already used by another account`;
+      }
     }
   }
 
@@ -248,13 +250,54 @@ router.patch('/:id/assignment', async (req, res) => {
         ? [...new Set(Array.isArray(req.body.allocatedDrivers) ? req.body.allocatedDrivers.filter(Boolean) : [])]
         : []
     };
+    // The previous user is released below before the selected user's username is
+    // updated.  Therefore this route must not reject the current user's vehicle
+    // username as a collision before the reassignment can take place.
     const validationError = await validateVehicle({
       ...vehicle.toObject(),
       ...payload
-    });
+    }, true, false);
 
     if (validationError) {
       return res.status(400).json({ error: validationError });
+    }
+
+    let previouslyAssignedVehicle = null;
+
+    if (vehicle.ownership === 'personal' && payload.allocatedUser) {
+      previouslyAssignedVehicle = await Vehicle.findOne({
+        _id: { $ne: vehicle._id },
+        ownership: 'personal',
+        allocatedUser: payload.allocatedUser
+      }).select('vehicleNumber make name allocatedUser allocationHistory dateOfUserAllocation');
+
+      if (previouslyAssignedVehicle && req.body.confirmReassignment !== true) {
+        return res.status(409).json({
+          code: 'USER_ALREADY_ASSIGNED',
+          error: 'This user is already assigned to another vehicle',
+          currentVehicle: {
+            _id: previouslyAssignedVehicle._id,
+            vehicleNumber: previouslyAssignedVehicle.vehicleNumber,
+            make: previouslyAssignedVehicle.make,
+            name: previouslyAssignedVehicle.name
+          }
+        });
+      }
+
+      const generatedUsername = usernameFromVehicleNumber(vehicle.vehicleNumber);
+      const currentUserId = vehicle.allocatedUser;
+      const usernameOwner = generatedUsername
+        ? await User.findOne({
+            username: generatedUsername,
+            _id: { $nin: [payload.allocatedUser, currentUserId].filter(Boolean) }
+          }).select('_id')
+        : null;
+
+      if (usernameOwner) {
+        return res.status(409).json({
+          error: `Generated username "${generatedUsername}" is already used by another account`
+        });
+      }
     }
 
     const currentEntries = allocationEntries(
@@ -299,6 +342,22 @@ router.patch('/:id/assignment', async (req, res) => {
     vehicle.allocatedUser = payload.allocatedUser;
     vehicle.allocatedDrivers = payload.allocatedDrivers;
     vehicle.dateOfUserAllocation = nextEntries.length ? assignedAt : null;
+
+    if (previouslyAssignedVehicle) {
+      previouslyAssignedVehicle.allocationHistory.forEach(entry => {
+        if (
+          entry.allocationType === 'user'
+          && sameId(entry.user, payload.allocatedUser)
+          && !entry.unassignedAt
+        ) {
+          entry.unassignedAt = assignedAt;
+        }
+      });
+      previouslyAssignedVehicle.allocatedUser = null;
+      previouslyAssignedVehicle.dateOfUserAllocation = null;
+      await previouslyAssignedVehicle.save();
+    }
+
     await vehicle.save();
 
     await syncUserVehicleAssignment(

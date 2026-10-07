@@ -14,6 +14,7 @@ const adminNavItems = [
   {
     id: 'dashboard',
     label: 'Dashboard',
+    path: '/admin/dashboard',
     icon: (
       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 13h6V4H4v9zm10 7h6V4h-6v16zM4 20h6v-5H4v5z" />
@@ -23,6 +24,7 @@ const adminNavItems = [
   {
     id: 'analytics',
     label: 'Analytics',
+    path: '/admin/analytics',
     icon: (
       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 3v18h18M7 15l3-3 3 2 5-7" />
@@ -32,6 +34,7 @@ const adminNavItems = [
   {
     id: 'employees',
     label: 'Users',
+    path: '/admin/users',
     icon: (
       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a4 4 0 00-4-4h-1M9 20H4v-2a4 4 0 014-4h1m4-4a4 4 0 100-8 4 4 0 000 8zm6 2a3 3 0 100-6" />
@@ -41,6 +44,7 @@ const adminNavItems = [
   {
     id: 'vehicles',
     label: 'Vehicles',
+    path: '/admin/vehicles',
     icon: (
       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17a2 2 0 11-4 0 2 2 0 014 0zM19 17a2 2 0 11-4 0 2 2 0 014 0z" />
@@ -51,6 +55,7 @@ const adminNavItems = [
   {
     id: 'companyDrivers',
     label: 'Company Drivers',
+    path: '/admin/company-drivers',
     icon: (
       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 11V7a4 4 0 10-8 0v4M5 11h14l-1 9H6l-1-9z" />
@@ -60,6 +65,7 @@ const adminNavItems = [
   {
     id: 'readings',
     label: 'Readings',
+    path: '/admin/readings',
     icon: (
       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
@@ -67,6 +73,14 @@ const adminNavItems = [
     )
   }
 ];
+
+const defaultAdminPath = '/admin/dashboard';
+
+const getAdminPageFromPath = (pathname) => (
+  adminNavItems.find(item => item.path === pathname)?.id || 'dashboard'
+);
+
+const isAdminPath = (pathname) => adminNavItems.some(item => item.path === pathname);
 
 const getUserVehicleOptions = (user) => {
   if (!user || user.role === 'admin') {
@@ -103,7 +117,7 @@ const getVehicleLabel = (vehicle) => {
 function App() {
   const [user, setUser] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
-  const [adminPage, setAdminPage] = useState('dashboard');
+  const [adminPage, setAdminPage] = useState(() => getAdminPageFromPath(window.location.pathname));
   const [selectedVehicleNumber, setSelectedVehicleNumber] = useState('');
 
   // Driver login: vehicle & driver name dropdowns
@@ -136,6 +150,30 @@ function App() {
     loadSession();
   }, []);
 
+  useEffect(() => {
+    const handleBrowserNavigation = () => {
+      setAdminPage(getAdminPageFromPath(window.location.pathname));
+    };
+
+    window.addEventListener('popstate', handleBrowserNavigation);
+    return () => window.removeEventListener('popstate', handleBrowserNavigation);
+  }, []);
+
+  useEffect(() => {
+    if (!authChecked || !user) {
+      return;
+    }
+
+    if (user.role === 'admin' && !isAdminPath(window.location.pathname)) {
+      window.history.replaceState({}, '', defaultAdminPath);
+      setAdminPage('dashboard');
+    }
+
+    if (user.role !== 'admin' && window.location.pathname.startsWith('/admin')) {
+      window.history.replaceState({}, '', '/');
+    }
+  }, [authChecked, user]);
+
   // Auto-load vehicle & driver name options when a driver logs in
   useEffect(() => {
     if (!user || user.role !== 'driver') return;
@@ -154,6 +192,7 @@ function App() {
 
   const handleLogout = () => {
     localStorage.removeItem('authToken');
+    window.history.replaceState({}, '', '/');
     setUser(null);
     setAdminPage('dashboard');
     setSelectedVehicleNumber('');
@@ -161,6 +200,16 @@ function App() {
     setSelectedDriverName('');
     setDriverSelectionConfirmed(false);
     setDriverOptionsLoaded(false);
+  };
+
+  const navigateToAdminPage = (path) => {
+    if (window.location.pathname === path) {
+      return;
+    }
+
+    window.history.pushState({}, '', path);
+    setAdminPage(getAdminPageFromPath(path));
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   if (!authChecked) {
@@ -232,9 +281,13 @@ function App() {
                     const isActive = adminPage === item.id;
 
                     return (
-                      <button
+                      <a
                         key={item.id}
-                        onClick={() => setAdminPage(item.id)}
+                        href={item.path}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          navigateToAdminPage(item.path);
+                        }}
                         className={`shrink-0 flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-semibold transition-colors ${
                           isActive
                             ? 'bg-brand-600 text-white shadow-sm'
@@ -243,7 +296,7 @@ function App() {
                       >
                         {item.icon}
                         {item.label}
-                      </button>
+                      </a>
                     );
                   })}
                 </nav>
