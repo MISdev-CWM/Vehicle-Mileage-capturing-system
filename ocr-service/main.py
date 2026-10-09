@@ -1,13 +1,9 @@
-﻿from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import os
-import PIL.Image
-# Pillow 10+ removed ANTIALIAS -- restore as alias for LANCZOS so EasyOCR works
-if not hasattr(PIL.Image, 'ANTIALIAS'):
-    PIL.Image.ANTIALIAS = PIL.Image.LANCZOS
-import easyocr
 import numpy as np
 from PIL import Image
+from paddleocr import PaddleOCR
 import io
 import re
 import logging
@@ -25,12 +21,15 @@ app.add_middleware(
 )
 
 # ---------------------------------------------------------------------------
-# EasyOCR reader -- digit-only allowlist dramatically reduces false positives
+# PP-OCRv6 medium pipeline, running on CPU.
 # ---------------------------------------------------------------------------
-reader = easyocr.Reader(['en'], gpu=False)
-
-# Only accept digits -- rules out "km/h", brand names, units, etc.
-DIGIT_ALLOWLIST = '0123456789'
+reader = PaddleOCR(
+    ocr_version="PP-OCRv6",
+    device="cpu",
+    use_doc_orientation_classify=False,
+    use_doc_unwarping=False,
+    use_textline_orientation=False,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -54,7 +53,7 @@ def _to_gray(image):
 
 
 def _to_3ch(gray):
-    """Single-channel -> 3-channel (EasyOCR requirement)."""
+    """Single-channel -> 3-channel for the OCR pipeline."""
     return cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
 
 
@@ -183,19 +182,32 @@ def crop_odometer_roi(image):
 
 
 # ---------------------------------------------------------------------------
-# OCR pass with digit-only allowlist
+# OCR pass, converted to the tuple shape used by candidate extraction
 # ---------------------------------------------------------------------------
 
 def run_ocr(img_array):
-    """Run EasyOCR restricted to digit characters only."""
-    return reader.readtext(
-        img_array,
-        allowlist=DIGIT_ALLOWLIST,
-        paragraph=False,
-        detail=1,
-        width_ths=0.9,
-        batch_size=4,
-    )
+    """Run PP-OCRv6 and return (box, text, confidence) tuples."""
+    results = []
+    for prediction in reader.predict(input=img_array):
+        output = prediction.json
+        if not isinstance(output, dict):
+            raise TypeError("PaddleOCR returned an invalid prediction result")
+
+        # PaddleX versions may expose the OCR fields directly or under "res".
+        output = output.get("res", output)
+        texts = output.get("rec_texts")
+        scores = output.get("rec_scores")
+        boxes = output.get("rec_polys", output.get("dt_polys", []))
+        if not isinstance(texts, list) or not isinstance(scores, list):
+            raise ValueError("PaddleOCR result is missing recognized text or scores")
+        if len(texts) != len(scores):
+            raise ValueError("PaddleOCR returned mismatched text and score counts")
+
+        for index, (text, confidence) in enumerate(zip(texts, scores)):
+            box = boxes[index] if index < len(boxes) else None
+            results.append((box, str(text), float(confidence)))
+
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -204,8 +216,7 @@ def run_ocr(img_array):
 
 def extract_candidates(ocr_results, pipeline_name, weight=1.0):
     """
-    Parse EasyOCR results into mileage candidates.
-    Digit-only allowlist means no noise filtering needed -- just length/range checks.
+    Parse PaddleOCR results into mileage candidates, ignoring non-digit characters.
     """
     candidates = []
     for bbox, text, conf in ocr_results:
