@@ -378,13 +378,15 @@ const AnalyticsDashboard = () => {
   }, [leaderboardRows]);
   const driverRange = getSelectionRange(driverSelection);
   const filteredDriverUsage = driverVehicleUsage.map(usage => {
-    const dailyUsage = (usage.allDailyUsage || usage.dailyUsage)
+    const periodUsage = (usage.allDailyUsage || usage.dailyUsage)
       .filter(day => day.date >= driverRange.start && day.date <= driverRange.end);
     return {
       ...usage,
-      dailyUsage: dailyUsage.slice(-7).reverse(),
-      latestDailyUsage: dailyUsage.at(-1) || null,
-      periodDistance: dailyUsage.reduce((total, day) => total + day.distance, 0)
+      dailyUsage: periodUsage.slice(-7).reverse(),
+      latestDailyUsage: periodUsage.at(-1) || null,
+      periodStartUsage: periodUsage[0] || null,
+      periodEndUsage: periodUsage.at(-1) || null,
+      periodDistance: periodUsage.reduce((total, day) => total + day.distance, 0)
     };
   }).filter(usage => usage.latestDailyUsage);
 
@@ -582,7 +584,8 @@ const AnalyticsDashboard = () => {
                     <td className="px-4 py-4">
                       <p className="font-mono text-sm font-semibold text-brand-700">{formatKm(usage.periodDistance)}</p>
                       <p className="text-xs text-slate-500 mt-1">
-                        {formatUsageDate(usage.latestDailyUsage?.date)}: {formatNumber(usage.latestDailyUsage?.startMileage)} to {formatNumber(usage.latestDailyUsage?.endMileage)}
+                        {formatUsageDate(usage.periodStartUsage?.date)} to {formatUsageDate(usage.periodEndUsage?.nextDate || usage.periodEndUsage?.date)}:{' '}
+                        {formatNumber(usage.periodStartUsage?.startMileage)} to {formatNumber(usage.periodEndUsage?.endMileage)}
                       </p>
                     </td>
                     <td className="px-4 py-4 text-right font-mono text-sm font-semibold text-slate-900">{formatKm(usage.periodDistance)}</td>
