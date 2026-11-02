@@ -82,13 +82,10 @@ const VehicleUsage = ({ onBack }) => {
       return userOptions;
     }
 
-    if (selectedVehicle.ownership === 'company') {
-      return userOptions.filter(option => option.isDriver);
-    }
-
     const allocatedUser = selectedVehicle.allocatedUser;
     if (!allocatedUser?._id) {
-      return [];
+      const legacyDriverIds = new Set((selectedVehicle.allocatedDrivers || []).map(driver => `user:${driver._id}`));
+      return userOptions.filter(option => legacyDriverIds.has(option.value));
     }
 
     const allocatedUserKey = `user:${allocatedUser._id}`;
@@ -99,9 +96,7 @@ const VehicleUsage = ({ onBack }) => {
       isDriver: false
     }];
   })();
-  const userPlaceholder = selectedVehicle?.ownership === 'company'
-    ? 'All drivers'
-    : selectedVehicle?.ownership === 'personal' && visibleUserOptions.length === 0
+  const userPlaceholder = selectedVehicle && visibleUserOptions.length === 0
       ? 'No user assigned'
       : 'All users';
 
@@ -203,7 +198,7 @@ const VehicleUsage = ({ onBack }) => {
               value={filters.userKey}
               onChange={(event) => setFilters(previous => ({ ...previous, userKey: event.target.value }))}
               className="input"
-              disabled={optionsLoading || (selectedVehicle?.ownership === 'personal' && visibleUserOptions.length === 0)}
+              disabled={optionsLoading || (selectedVehicle && visibleUserOptions.length === 0)}
             >
               <option value="">{userPlaceholder}</option>
               {visibleUserOptions.map(option => (

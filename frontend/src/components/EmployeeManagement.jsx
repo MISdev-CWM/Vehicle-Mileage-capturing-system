@@ -9,7 +9,6 @@ const emptyForm = {
   username: '',
   contactNumber: '',
   role: 'user',
-  vehicleId: '',
   password: ''
 };
 
@@ -38,11 +37,6 @@ const getAssignedVehicleText = (user) => {
   }
 
   return [];
-};
-
-const getGeneratedUserUsername = (data) => {
-  const source = data.vehicleId || data.employeeId;
-  return source.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
 };
 
 const EmployeeManagement = () => {
@@ -130,8 +124,7 @@ const EmployeeManagement = () => {
       const payload = {
         ...formData,
         email: formData.role === 'driver' ? '' : formData.email,
-        username: formData.role === 'user' ? '' : formData.username,
-        vehicleId: formData.role === 'user' ? formData.vehicleId : ''
+        username: formData.role === 'user' ? 'non' : formData.username
       };
 
       if (editingId && !payload.password) {
@@ -164,7 +157,6 @@ const EmployeeManagement = () => {
       username: user.username || '',
       contactNumber: user.contactNumber || '',
       role: ['admin', 'driver'].includes(user.role) ? user.role : 'user',
-      vehicleId: user.role === 'user' ? (user.vehicleId || '') : '',
       password: ''
     });
     setSuccess('');
@@ -397,9 +389,8 @@ const EmployeeManagement = () => {
                     <label className="block text-sm font-medium text-slate-700 mb-1.5">Username</label>
                     <input
                       type="text"
-                      value={getGeneratedUserUsername(formData)}
+                      value={editingId ? (formData.username || 'non') : 'non'}
                       className="input bg-slate-100 text-slate-500 cursor-not-allowed"
-                      placeholder="Auto generated"
                       disabled
                     />
                   </div>
@@ -429,19 +420,6 @@ const EmployeeManagement = () => {
                   />
                 </div>
               </div>
-
-              {formData.role === 'user' && (
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Assigned Vehicle No</label>
-                  <input
-                    type="text"
-                    value={formData.vehicleId}
-                    onChange={(e) => handleChange('vehicleId', e.target.value)}
-                    className="input uppercase"
-                    placeholder="VH-2024-001"
-                  />
-                </div>
-              )}
 
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1.5">

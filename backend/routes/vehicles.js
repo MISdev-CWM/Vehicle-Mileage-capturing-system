@@ -2,43 +2,76 @@ const express = require('express');
 const Vehicle = require('../models/Vehicle');
 const User = require('../models/User');
 const { authenticate, authorizeRoles } = require('../middleware/auth');
-const { usernameFromEmployeeId, usernameFromVehicleNumber } = require('../utils/usernames');
+const { usernameFromVehicleNumber } = require('../utils/usernames');
 
 const router = express.Router();
 
 router.use(authenticate, authorizeRoles('admin'));
 
+const fuelTypes = ['petrol', 'diesel', 'hybrid', 'electric'];
+
 const toDateOrNull = (value) => value ? new Date(value) : null;
 
-const normalizeVehicleInput = (body) => ({
-  vehicleNumber: body.vehicleNumber?.trim().toUpperCase(),
-  make: body.make?.trim(),
-  name: body.name?.trim(),
-  model: body.model?.trim(),
-  engineCapacity: body.engineCapacity?.trim(),
-  manufacturingYear: body.manufacturingYear ? Number(body.manufacturingYear) : null,
-  status: body.status === 'inactive' ? 'inactive' : 'active',
-  ownership: body.ownership === 'personal' ? 'personal' : 'company',
-  allocatedUser: body.ownership === 'personal' ? (body.allocatedUser || null) : null,
-  allocatedDrivers: body.ownership === 'personal' ? [] : (Array.isArray(body.allocatedDrivers) ? body.allocatedDrivers.filter(Boolean) : []),
-  dateOfPurchasing: toDateOrNull(body.dateOfPurchasing),
-  dateOfUserAllocation: toDateOrNull(body.dateOfUserAllocation)
-});
+const normalizeEngineCapacity = (value) => {
+  const normalized = value == null ? '' : String(value).trim().toLowerCase();
+  const match = normalized.match(/^(\d{1,4})\s*(?:cc)?$/);
 
-const validateVehicle = async (payload, validateAllocation = true, validateGeneratedUsername = true) => {
-  if (!payload.vehicleNumber || !payload.make || !payload.name || !payload.model || !payload.engineCapacity || !payload.manufacturingYear) {
-    return 'Vehicle number, make, name, model, engine capacity, and manufacturing year are required';
-  }
+  return match ? `${match[1]}cc` : normalized;
+};
 
-  if (payload.manufacturingYear < 1900 || payload.manufacturingYear > 2100) {
-    return 'Please enter a valid manufacturing year';
+const normalizeVehicleInput = (body) => {
+  const ownership = ['personal', 'pool'].includes(body.ownership) ? body.ownership : 'company';
+
+  return {
+    vehicleNumber: body.vehicleNumber?.trim().toUpperCase(),
+    make: body.make?.trim(),
+    name: body.name?.trim(),
+    model: body.model?.trim(),
+    engineCapacity: normalizeEngineCapacity(body.engineCapacity),
+    fuelType: body.fuelType?.trim().toLowerCase(),
+    manufacturingYear: body.manufacturingYear ? Number(body.manufacturingYear) : null,
+    status: body.status === 'inactive' ? 'inactive' : 'active',
+    ownership,
+    allocatedUser: body.allocatedUser || null,
+    allocatedDrivers: [],
+    dateOfPurchasing: toDateOrNull(body.dateOfPurchasing),
+    dateOfUserAllocation: toDateOrNull(body.dateOfUserAllocation)
+  };
+};
+
+const validateVehicle = async (
+  payload,
+  validateAllocation = true,
+  validateGeneratedUsername = true,
+  validateVehicleDetails = true
+) => {
+  if (validateVehicleDetails) {
+    if (!payload.vehicleNumber || !payload.make || !payload.name || !payload.engineCapacity || !payload.fuelType || !payload.manufacturingYear) {
+      return 'Vehicle number, make, name, engine capacity, fuel type, and manufacturing year are required';
+    }
+
+    if (!/^[A-Z]{1,3}-\d{4}$/.test(payload.vehicleNumber)) {
+      return 'Vehicle number must contain a maximum of 3 English letters followed by exactly 4 numbers';
+    }
+
+    if (!/^\d{1,4}cc$/.test(payload.engineCapacity)) {
+      return 'Engine capacity must contain a maximum of 4 numbers';
+    }
+
+    if (!fuelTypes.includes(payload.fuelType)) {
+      return 'Fuel type must be Petrol, Diesel, Hybrid, or Electric';
+    }
+
+    if (payload.manufacturingYear < 1900 || payload.manufacturingYear > 2100) {
+      return 'Please enter a valid manufacturing year';
+    }
   }
 
   if (!validateAllocation) {
     return null;
   }
 
-  if (payload.ownership === 'personal' && payload.allocatedUser) {
+  if (['personal', 'company'].includes(payload.ownership) && payload.allocatedUser) {
     const user = await User.findById(payload.allocatedUser).select('role isActive');
 
     if (!user || !user.isActive || user.role !== 'user') {
@@ -63,6 +96,14 @@ const validateVehicle = async (payload, validateAllocation = true, validateGener
     }
   }
 
+  if (payload.ownership === 'pool' && payload.allocatedUser) {
+    const user = await User.findById(payload.allocatedUser).select('role isActive');
+
+    if (!user || !user.isActive || user.role === 'admin') {
+      return 'Pool vehicles can only be allocated to an active non-admin user';
+    }
+  }
+
   if (payload.ownership === 'company' && payload.allocatedDrivers.length > 0) {
     const drivers = await User.find({
       _id: { $in: payload.allocatedDrivers },
@@ -79,7 +120,7 @@ const validateVehicle = async (payload, validateAllocation = true, validateGener
 };
 
 const allocationEntries = (ownership, allocatedUser, allocatedDrivers, assignedAt) => {
-  if (ownership === 'personal') {
+  if (allocatedUser) {
     return allocatedUser
       ? [{ user: allocatedUser, allocationType: 'user', assignedAt }]
       : [];
@@ -92,11 +133,10 @@ const sameId = (left, right) => left?.toString() === right?.toString();
 
 const syncUserVehicleAssignment = async (oldUserId, newUserId, vehicleNumber) => {
   if (oldUserId && oldUserId.toString() !== newUserId?.toString()) {
-    const oldUser = await User.findById(oldUserId).select('employeeId');
     await User.findByIdAndUpdate(oldUserId, {
       $set: {
         vehicleId: '',
-        username: usernameFromEmployeeId(oldUser?.employeeId || oldUserId)
+        username: 'non'
       }
     }, { runValidators: true });
   }
@@ -127,6 +167,7 @@ router.get('/', async (req, res) => {
             { name: new RegExp(search, 'i') },
             { model: new RegExp(search, 'i') },
             { engineCapacity: new RegExp(search, 'i') },
+            { fuelType: new RegExp(search, 'i') },
             { status: new RegExp(search, 'i') },
             { ownership: new RegExp(search, 'i') }
           ]
@@ -181,7 +222,9 @@ router.post('/', async (req, res) => {
     );
 
     const vehicle = await Vehicle.create(payload);
-    await syncUserVehicleAssignment(null, vehicle.allocatedUser, vehicle.vehicleNumber);
+    if (['personal', 'company'].includes(vehicle.ownership)) {
+      await syncUserVehicleAssignment(null, vehicle.allocatedUser, vehicle.vehicleNumber);
+    }
 
     const populated = await populateVehicle(Vehicle.findById(vehicle._id).select('-__v'));
     res.status(201).json(populated);
@@ -221,7 +264,9 @@ router.put('/:id', async (req, res) => {
       { new: true, runValidators: true }
     ).select('-__v');
 
-    await syncUserVehicleAssignment(existingVehicle.allocatedUser, vehicle.allocatedUser, vehicle.vehicleNumber);
+    if (['personal', 'company'].includes(vehicle.ownership)) {
+      await syncUserVehicleAssignment(existingVehicle.allocatedUser, vehicle.allocatedUser, vehicle.vehicleNumber);
+    }
 
     const populated = await populateVehicle(Vehicle.findById(vehicle._id).select('-__v'));
     res.json(populated);
@@ -245,10 +290,8 @@ router.patch('/:id/assignment', async (req, res) => {
 
     const payload = {
       ownership: vehicle.ownership,
-      allocatedUser: vehicle.ownership === 'personal' ? (req.body.allocatedUser || null) : null,
-      allocatedDrivers: vehicle.ownership === 'company'
-        ? [...new Set(Array.isArray(req.body.allocatedDrivers) ? req.body.allocatedDrivers.filter(Boolean) : [])]
-        : []
+      allocatedUser: req.body.allocatedUser || null,
+      allocatedDrivers: []
     };
     // The previous user is released below before the selected user's username is
     // updated.  Therefore this route must not reject the current user's vehicle
@@ -256,7 +299,7 @@ router.patch('/:id/assignment', async (req, res) => {
     const validationError = await validateVehicle({
       ...vehicle.toObject(),
       ...payload
-    }, true, false);
+    }, true, false, false);
 
     if (validationError) {
       return res.status(400).json({ error: validationError });
@@ -264,10 +307,10 @@ router.patch('/:id/assignment', async (req, res) => {
 
     let previouslyAssignedVehicle = null;
 
-    if (vehicle.ownership === 'personal' && payload.allocatedUser) {
+    if (['personal', 'company'].includes(vehicle.ownership) && payload.allocatedUser) {
       previouslyAssignedVehicle = await Vehicle.findOne({
         _id: { $ne: vehicle._id },
-        ownership: 'personal',
+        ownership: { $in: ['personal', 'company'] },
         allocatedUser: payload.allocatedUser
       }).select('vehicleNumber make name allocatedUser allocationHistory dateOfUserAllocation');
 
@@ -361,8 +404,8 @@ router.patch('/:id/assignment', async (req, res) => {
     await vehicle.save();
 
     await syncUserVehicleAssignment(
-      vehicle.ownership === 'personal' ? currentEntries[0]?.user : null,
-      vehicle.ownership === 'personal' ? payload.allocatedUser : null,
+      ['personal', 'company'].includes(vehicle.ownership) ? currentEntries.find(entry => entry.allocationType === 'user')?.user : null,
+      ['personal', 'company'].includes(vehicle.ownership) ? payload.allocatedUser : null,
       vehicle.vehicleNumber
     );
 
@@ -382,7 +425,9 @@ router.delete('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Vehicle not found' });
     }
 
-    await syncUserVehicleAssignment(vehicle.allocatedUser, null, vehicle.vehicleNumber);
+    if (['personal', 'company'].includes(vehicle.ownership)) {
+      await syncUserVehicleAssignment(vehicle.allocatedUser, null, vehicle.vehicleNumber);
+    }
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: 'Failed to delete vehicle' });

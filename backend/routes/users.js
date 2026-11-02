@@ -3,7 +3,6 @@ const User = require('../models/User');
 const Vehicle = require('../models/Vehicle');
 const { authenticate, authorizeRoles } = require('../middleware/auth');
 const { hashPassword } = require('../utils/password');
-const { usernameFromEmployeeId, usernameFromVehicleNumber } = require('../utils/usernames');
 
 const router = express.Router();
 
@@ -24,13 +23,15 @@ const toPublicUser = (user, assignedVehicles = []) => ({
   createdAt: user.createdAt
 });
 
-const normalizeUserInput = (body) => {
+const normalizeUserInput = (body, existingUser = null) => {
   const role = ['admin', 'driver'].includes(body.role) ? body.role : 'user';
   const employeeId = body.employeeId?.trim().toUpperCase() || '';
-  const vehicleId = role === 'user' ? (body.vehicleId?.trim().toUpperCase() || '') : '';
   const username = role === 'user'
-    ? (vehicleId ? usernameFromVehicleNumber(vehicleId) : usernameFromEmployeeId(employeeId))
+    ? (existingUser?.role === 'user' ? existingUser.username : 'non')
     : body.username?.trim().toLowerCase();
+  const vehicleId = role === 'user' && existingUser?.role === 'user'
+    ? existingUser.vehicleId || ''
+    : '';
   const email = body.email?.trim().toLowerCase();
 
   return {
@@ -66,11 +67,28 @@ const validateUser = (payload, password, isUpdate = false) => {
     return 'Username can only contain letters, numbers, dots, underscores, and hyphens';
   }
 
+  if (payload.role !== 'user' && payload.username === 'non') {
+    return 'The username "non" is reserved for unassigned users';
+  }
+
   if (password && password.length < 6) {
     return 'Password must be at least 6 characters';
   }
 
   return null;
+};
+
+const usernameExists = (username, excludedUserId = null) => {
+  if (username === 'non') {
+    return false;
+  }
+
+  const filter = { username };
+  if (excludedUserId) {
+    filter._id = { $ne: excludedUserId };
+  }
+
+  return User.exists(filter);
 };
 
 router.get('/', async (req, res) => {
@@ -91,6 +109,11 @@ router.get('/', async (req, res) => {
 
     if (req.query.assignable === 'true') {
       filter.role = 'user';
+      filter.isActive = true;
+    }
+
+    if (req.query.poolAssignable === 'true') {
+      filter.role = { $ne: 'admin' };
       filter.isActive = true;
     }
 
@@ -149,6 +172,10 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: validationError });
     }
 
+    if (await usernameExists(payload.username)) {
+      return res.status(409).json({ error: 'Username already exists' });
+    }
+
     const { hash, salt } = hashPassword(req.body.password);
     const user = await User.create({
       ...payload,
@@ -169,11 +196,22 @@ router.post('/', async (req, res) => {
 
 router.put('/:id', async (req, res) => {
   try {
-    const payload = normalizeUserInput(req.body);
+    const existingUser = await User.findById(req.params.id)
+      .select('role username vehicleId');
+
+    if (!existingUser) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const payload = normalizeUserInput(req.body, existingUser);
     const validationError = validateUser(payload, req.body.password, true);
 
     if (validationError) {
       return res.status(400).json({ error: validationError });
+    }
+
+    if (await usernameExists(payload.username, existingUser._id)) {
+      return res.status(409).json({ error: 'Username already exists' });
     }
 
     const update = { ...payload };
@@ -189,10 +227,6 @@ router.put('/:id', async (req, res) => {
       update,
       { new: true, runValidators: true }
     ).select('name email employeeId username contactNumber role vehicleId isActive createdAt');
-
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
 
     res.json(toPublicUser(user));
   } catch (error) {

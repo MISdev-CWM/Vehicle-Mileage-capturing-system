@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
+const User = require('./models/User');
 
 const app = express();
 
@@ -25,7 +26,16 @@ app.use(cors({
 app.use(express.json());
 
 mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/vehicle-mileage')
-  .then(() => console.log('MongoDB connected'))
+  .then(async () => {
+    const indexes = await User.collection.indexes();
+    const uniqueUsernameIndex = indexes.find(index => index.unique && index.key?.username === 1);
+
+    if (uniqueUsernameIndex) {
+      await User.collection.dropIndex(uniqueUsernameIndex.name);
+    }
+
+    console.log('MongoDB connected');
+  })
   .catch(err => console.error('MongoDB error:', err));
 
 app.use('/api/auth', require('./routes/auth'));

@@ -20,13 +20,18 @@ const vehicleSchema = new mongoose.Schema({
   },
   model: {
     type: String,
-    required: true,
+    default: '',
     trim: true
   },
   engineCapacity: {
     type: String,
     required: true,
     trim: true
+  },
+  fuelType: {
+    type: String,
+    enum: ['petrol', 'diesel', 'hybrid', 'electric'],
+    default: null
   },
   manufacturingYear: {
     type: Number,
@@ -42,7 +47,7 @@ const vehicleSchema = new mongoose.Schema({
   },
   ownership: {
     type: String,
-    enum: ['company', 'personal'],
+    enum: ['company', 'personal', 'pool'],
     default: 'company'
   },
   allocatedUser: {

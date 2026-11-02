@@ -84,6 +84,8 @@ const createVehicleAnalyticsRow = (vehicle) => ({
   status: vehicle.status,
   ownership: vehicle.ownership,
   readingCount: 0,
+  firstMileage: null,
+  firstReadingDate: null,
   totalDistance: 0,
   monthDistance: 0,
   lastMileage: null,
@@ -117,6 +119,12 @@ const createOperatorAnalyticsRow = (reading, userMap) => {
   };
 };
 
+/*
+ * Legacy daily analytics (kept for reference).
+ * This implementation compared the first reading of one day with the first
+ * reading of the next available day. The active implementation below uses the
+ * first and last recordings inside the selected date range instead.
+ *
 const analyticsTimeZone = 'Asia/Colombo';
 
 const calendarDateKey = (value) => {
@@ -305,9 +313,152 @@ const createUserDailyUsage = (readings, userMap) => createVehicleAssignmentSessi
     ...day
   })))
   .sort((left, right) => right.date.localeCompare(left.date) || left.name.localeCompare(right.name));
+*/
+
+const dateInputPattern = /^\d{4}-\d{2}-\d{2}$/;
+
+const parseRangeBoundary = (value, endOfDay = false) => {
+  if (!value || !dateInputPattern.test(value)) {
+    return null;
+  }
+
+  const time = endOfDay ? '23:59:59.999' : '00:00:00.000';
+  const date = new Date(`${value}T${time}+05:30`);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
+const createRangeUsage = (readings, userMap) => {
+  const readingsByVehicle = new Map();
+
+  readings.forEach(reading => {
+    const vehicleNumber = reading.vehicleId?.toUpperCase();
+    const readingDate = new Date(reading.readingDate);
+
+    if (!vehicleNumber || Number.isNaN(readingDate.getTime())) {
+      return;
+    }
+
+    const vehicleReadings = readingsByVehicle.get(vehicleNumber) || [];
+    vehicleReadings.push({
+      reading,
+      readingDate,
+      vehicleNumber,
+      operator: createOperatorAnalyticsRow(reading, userMap)
+    });
+    readingsByVehicle.set(vehicleNumber, vehicleReadings);
+  });
+
+  return Array.from(readingsByVehicle.values()).flatMap(vehicleReadings => {
+    const sessions = [];
+    let currentSession = null;
+
+    vehicleReadings
+      .sort((left, right) => left.readingDate - right.readingDate)
+      .forEach(entry => {
+        if (!currentSession || currentSession.operator.key !== entry.operator.key) {
+          currentSession = {
+            key: `${entry.operator.key}:${entry.vehicleNumber}:range:${sessions.length + 1}`,
+            operator: entry.operator,
+            userId: entry.reading.submittedBy || '',
+            vehicleNumber: entry.vehicleNumber,
+            firstReading: entry,
+            lastReading: entry,
+            readingCount: 1
+          };
+          sessions.push(currentSession);
+          return;
+        }
+
+        currentSession.lastReading = entry;
+        currentSession.readingCount += 1;
+      });
+
+    return sessions;
+  })
+    .filter(session => session.readingCount >= 2)
+    .map(session => ({
+      key: session.key,
+      operatorKey: session.operator.key,
+      userId: session.userId,
+      name: session.operator.name,
+      employeeId: session.operator.employeeId,
+      username: session.operator.username,
+      role: session.operator.role,
+      vehicleNumber: session.vehicleNumber,
+      startMileage: session.firstReading.reading.extractedMileage,
+      endMileage: session.lastReading.reading.extractedMileage,
+      startReadingAt: session.firstReading.readingDate,
+      endReadingAt: session.lastReading.readingDate,
+      readingCount: session.readingCount,
+      distance: Math.round(
+        session.lastReading.reading.extractedMileage
+        - session.firstReading.reading.extractedMileage
+      )
+    }))
+    .filter(usage => usage.distance >= 0)
+    .sort((left, right) => right.distance - left.distance || left.name.localeCompare(right.name));
+};
+
+const getColomboDateKey = (value) => {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Colombo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(value);
+  const getPart = (type) => parts.find(part => part.type === type)?.value;
+
+  return `${getPart('year')}-${getPart('month')}-${getPart('day')}`;
+};
+
+const getLatestRecordingDaySummary = (readings) => {
+  const lastReadingByVehicle = new Map();
+  const distanceByDate = new Map();
+
+  readings.forEach(reading => {
+    const vehicleNumber = reading.vehicleId?.toUpperCase();
+    const readingDate = new Date(reading.readingDate);
+
+    if (!vehicleNumber || Number.isNaN(readingDate.getTime())) {
+      return;
+    }
+
+    const previousReading = lastReadingByVehicle.get(vehicleNumber);
+    if (previousReading) {
+      const distance = reading.extractedMileage - previousReading.extractedMileage;
+
+      if (distance >= 0) {
+        const date = getColomboDateKey(readingDate);
+        distanceByDate.set(date, (distanceByDate.get(date) || 0) + distance);
+      }
+    }
+
+    lastReadingByVehicle.set(vehicleNumber, reading);
+  });
+
+  const latestDate = Array.from(distanceByDate.keys()).sort().at(-1) || '';
+  return {
+    date: latestDate,
+    distance: latestDate ? Math.round(distanceByDate.get(latestDate)) : 0
+  };
+};
 
 router.get('/analytics', async (req, res) => {
   try {
+    const requestedStartDate = req.query.startDate?.trim();
+    const requestedEndDate = req.query.endDate?.trim();
+    const hasRequestedRange = Boolean(requestedStartDate || requestedEndDate);
+    const rangeStart = requestedStartDate ? parseRangeBoundary(requestedStartDate) : null;
+    const rangeEnd = requestedEndDate ? parseRangeBoundary(requestedEndDate, true) : null;
+
+    if (hasRequestedRange && (!rangeStart || !rangeEnd)) {
+      return res.status(400).json({ error: 'Start date and end date are required' });
+    }
+
+    if (hasRequestedRange && rangeStart > rangeEnd) {
+      return res.status(400).json({ error: 'End date must be on or after start date' });
+    }
+
     const [readings, vehicles, users, companyDriverCount] = await Promise.all([
       Reading.find()
         .sort({ vehicleId: 1, readingDate: 1 })
@@ -321,8 +472,6 @@ router.get('/analytics', async (req, res) => {
     currentMonthStart.setDate(1);
     currentMonthStart.setHours(0, 0, 0, 0);
 
-    const recentMonths = getRecentMonths(6);
-    const monthlyMap = new Map(recentMonths.map(month => [month.key, month]));
     const userMap = new Map(users.map(user => [user._id.toString(), user]));
     const vehicleMap = new Map();
 
@@ -342,7 +491,6 @@ router.get('/analytics', async (req, res) => {
     readings.forEach(reading => {
       const vehicleNumber = reading.vehicleId?.toUpperCase();
       const readingDate = new Date(reading.readingDate);
-
       if (!vehicleNumber) {
         return;
       }
@@ -374,11 +522,6 @@ router.get('/analytics', async (req, res) => {
         vehicleStats.confidenceTotal += reading.ocrConfidence;
       }
 
-      const month = monthlyMap.get(monthKey(readingDate));
-      if (month) {
-        month.readings += 1;
-      }
-
       const operatorKey = getOperatorKey(reading);
       if (!operatorMap.has(operatorKey)) {
         operatorMap.set(operatorKey, createOperatorAnalyticsRow(reading, userMap));
@@ -406,10 +549,6 @@ router.get('/analytics', async (req, res) => {
             monthDistance += distance;
             vehicleStats.monthDistance += distance;
           }
-
-          if (month) {
-            month.distance += distance;
-          }
         }
       }
 
@@ -432,8 +571,15 @@ router.get('/analytics', async (req, res) => {
         vehicles: operator.vehicles.sort()
       }))
       .sort((a, b) => b.totalDistance - a.totalDistance || b.readingCount - a.readingCount);
-    const driverVehicleUsage = createDriverVehicleUsage(readings, userMap);
-    const userDailyUsage = createUserDailyUsage(readings, userMap);
+    const rangeReadings = hasRequestedRange
+      ? readings.filter(reading => {
+        const readingDate = new Date(reading.readingDate);
+        return readingDate >= rangeStart && readingDate <= rangeEnd;
+      })
+      : [];
+    const rangeUsage = createRangeUsage(rangeReadings, userMap);
+    const rangeDistance = rangeUsage.reduce((total, usage) => total + usage.distance, 0);
+    const latestRecordingDay = getLatestRecordingDaySummary(readings);
 
     const activeVehicles = vehicles.filter(vehicle => vehicle.status === 'active').length;
     const unassignedVehicles = vehicles.filter(vehicle => {
@@ -444,6 +590,10 @@ router.get('/analytics', async (req, res) => {
 
     res.json({
       generatedAt: new Date(),
+      dateRange: {
+        startDate: requestedStartDate || null,
+        endDate: requestedEndDate || null
+      },
       kpis: {
         totalVehicles: vehicles.length,
         activeVehicles,
@@ -452,19 +602,17 @@ router.get('/analytics', async (req, res) => {
         totalReadings: readings.length,
         totalDistance: Math.round(totalDistance),
         monthDistance: Math.round(monthDistance),
+        rangeDistance: Math.round(rangeDistance),
+        latestDailyKilometers: latestRecordingDay.distance,
+        latestUsageDate: latestRecordingDay.date,
         averageConfidence: confidenceCount ? confidenceTotal / confidenceCount : 0,
         correctionRate: readings.length ? correctionCount / readings.length : 0,
         unassignedVehicles,
         suspiciousReadings
       },
-      monthlyTrend: recentMonths.map(month => ({
-        ...month,
-        distance: Math.round(month.distance)
-      })),
       vehicleUsage,
       operatorUsage,
-      driverVehicleUsage,
-      userDailyUsage
+      rangeUsage
     });
   } catch (error) {
     console.error('Analytics error:', error);
