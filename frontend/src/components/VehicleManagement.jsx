@@ -4,11 +4,13 @@ import api from '../api';
 import VehicleUsage from './VehicleUsage';
 
 const emptyForm = {
-  vehicleNumber: '',
+  vehicleNumberLetters: '',
+  vehicleNumberDigits: '',
   make: '',
   name: '',
   model: '',
   engineCapacity: '',
+  fuelType: '',
   manufacturingYear: '',
   status: 'active',
   ownership: 'company',
@@ -39,6 +41,31 @@ const formatDateTimeDisplay = (value) => {
   return new Date(value).toLocaleString();
 };
 
+const splitVehicleNumber = (value = '') => {
+  const normalized = value.trim().toUpperCase().replace(/\s+/g, '');
+  const separatorIndex = normalized.lastIndexOf('-');
+
+  if (separatorIndex === -1) {
+    const match = normalized.match(/^([A-Z]+)(\d+)$/);
+    return {
+      letters: match?.[1] || normalized,
+      digits: match?.[2] || ''
+    };
+  }
+
+  return {
+    letters: normalized.slice(0, separatorIndex),
+    digits: normalized.slice(separatorIndex + 1)
+  };
+};
+
+const getEngineCapacityDigits = (value = '') => value
+  .toString()
+  .trim()
+  .replace(/cc$/i, '')
+  .replace(/\D/g, '')
+  .slice(0, 4);
+
 const formatUserName = (user) => {
   if (!user) return 'Unknown user';
   const name = user.name || user.username || 'Unknown user';
@@ -53,7 +80,7 @@ const getCurrentAllocationEntries = (vehicle) => {
     return activeEntries;
   }
 
-  if (vehicle.ownership === 'personal' && vehicle.allocatedUser) {
+  if (vehicle.allocatedUser) {
     return [{
       _id: vehicle.allocatedUser._id,
       user: vehicle.allocatedUser,
@@ -71,7 +98,7 @@ const getCurrentAllocationEntries = (vehicle) => {
 const VehicleManagement = () => {
   const [vehicles, setVehicles] = useState([]);
   const [assignableUsers, setAssignableUsers] = useState([]);
-  const [driverUsers, setDriverUsers] = useState([]);
+  const [poolAssignableUsers, setPoolAssignableUsers] = useState([]);
   const [formData, setFormData] = useState(emptyForm);
   const [editingId, setEditingId] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -110,10 +137,10 @@ const VehicleManagement = () => {
 
     const loadData = async () => {
       try {
-        const [vehiclesRes, usersRes, driversRes] = await Promise.all([
+        const [vehiclesRes, usersRes, poolUsersRes] = await Promise.all([
           api.get('/vehicles'),
           api.get('/users', { params: { assignable: true } }),
-          api.get('/users', { params: { role: 'driver', active: true } })
+          api.get('/users', { params: { poolAssignable: true } })
         ]);
 
         if (!isActive) {
@@ -122,7 +149,7 @@ const VehicleManagement = () => {
 
         setVehicles(vehiclesRes.data);
         setAssignableUsers(usersRes.data);
-        setDriverUsers(driversRes.data);
+        setPoolAssignableUsers(poolUsersRes.data);
       } catch (err) {
         if (isActive) {
           setError(err.response?.data?.error || 'Failed to load vehicles');
@@ -149,35 +176,11 @@ const VehicleManagement = () => {
     setFormData(prev => ({
       ...prev,
       ownership: value,
-      allocatedUser: value === 'personal' ? prev.allocatedUser : '',
-      allocatedDrivers: value === 'company' ? prev.allocatedDrivers : []
+      allocatedUser: '',
+      allocatedDrivers: [],
+      dateOfPurchasing: value === 'personal' ? '' : prev.dateOfPurchasing,
+      dateOfUserAllocation: value === 'personal' ? '' : prev.dateOfUserAllocation
     }));
-  };
-
-  const handleDriverToggle = (driverId) => {
-    setFormData(prev => {
-      const isSelected = prev.allocatedDrivers.includes(driverId);
-
-      return {
-        ...prev,
-        allocatedDrivers: isSelected
-          ? prev.allocatedDrivers.filter(id => id !== driverId)
-          : [...prev.allocatedDrivers, driverId]
-      };
-    });
-  };
-
-  const handleAssignmentDriverToggle = (driverId) => {
-    setAssignmentForm(prev => {
-      const isSelected = prev.allocatedDrivers.includes(driverId);
-
-      return {
-        ...prev,
-        allocatedDrivers: isSelected
-          ? prev.allocatedDrivers.filter(id => id !== driverId)
-          : [...prev.allocatedDrivers, driverId]
-      };
-    });
   };
 
   const openCreateModal = () => {
@@ -238,8 +241,8 @@ const VehicleManagement = () => {
 
     try {
       await api.patch(`/vehicles/${assignmentVehicle._id}/assignment`, {
-        allocatedUser: assignmentForm.ownership === 'personal' ? (assignmentForm.allocatedUser || null) : null,
-        allocatedDrivers: assignmentForm.ownership === 'company' ? assignmentForm.allocatedDrivers : [],
+        allocatedUser: assignmentForm.allocatedUser || null,
+        allocatedDrivers: [],
         confirmReassignment
       });
       closeAssignmentModal();
@@ -273,10 +276,13 @@ const VehicleManagement = () => {
     setSuccess('');
 
     try {
+      const { vehicleNumberLetters, vehicleNumberDigits, ...vehicleDetails } = formData;
       const payload = {
-        ...formData,
-        allocatedUser: formData.ownership === 'personal' ? (formData.allocatedUser || null) : null,
-        allocatedDrivers: formData.ownership === 'company' ? formData.allocatedDrivers : []
+        ...vehicleDetails,
+        vehicleNumber: `${vehicleNumberLetters}-${vehicleNumberDigits}`,
+        engineCapacity: `${formData.engineCapacity}cc`,
+        allocatedUser: formData.allocatedUser || null,
+        allocatedDrivers: []
       };
 
       if (editingId) {
@@ -297,13 +303,16 @@ const VehicleManagement = () => {
   };
 
   const handleEdit = (vehicle) => {
+    const vehicleNumber = splitVehicleNumber(vehicle.vehicleNumber);
     setEditingId(vehicle._id);
     setFormData({
-      vehicleNumber: vehicle.vehicleNumber || '',
+      vehicleNumberLetters: vehicleNumber.letters,
+      vehicleNumberDigits: vehicleNumber.digits,
       make: vehicle.make || '',
       name: vehicle.name || '',
       model: vehicle.model || '',
-      engineCapacity: vehicle.engineCapacity || '',
+      engineCapacity: getEngineCapacityDigits(vehicle.engineCapacity),
+      fuelType: vehicle.fuelType || '',
       manufacturingYear: vehicle.manufacturingYear?.toString() || '',
       status: vehicle.status || 'active',
       ownership: vehicle.ownership || 'company',
@@ -405,11 +414,12 @@ const VehicleManagement = () => {
           <div className="text-center py-12 text-slate-500">No vehicles found</div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[900px]">
+            <table className="w-full min-w-[1000px]">
               <thead>
                 <tr className="border-b border-slate-200">
                   <th className="text-left text-xs font-semibold text-slate-500 uppercase tracking-wider pb-3">Vehicle Number</th>
                   <th className="text-left text-xs font-semibold text-slate-500 uppercase tracking-wider pb-3">Name</th>
+                  <th className="text-left text-xs font-semibold text-slate-500 uppercase tracking-wider pb-3">Fuel Type</th>
                   <th className="text-left text-xs font-semibold text-slate-500 uppercase tracking-wider pb-3">Ownership</th>
                   <th className="text-left text-xs font-semibold text-slate-500 uppercase tracking-wider pb-3">Allocated User/Drivers</th>
                   <th className="text-left text-xs font-semibold text-slate-500 uppercase tracking-wider pb-3">Purchase Date</th>
@@ -427,13 +437,13 @@ const VehicleManagement = () => {
                   >
                     <td className="py-3 font-mono text-sm font-semibold text-slate-900">{vehicle.vehicleNumber}</td>
                     <td className="py-3 text-sm text-slate-900">{[vehicle.make, vehicle.name].filter(Boolean).join(' ') || '-'}</td>
+                    <td className="py-3 text-sm text-slate-700 capitalize">{vehicle.fuelType || '-'}</td>
                     <td className="py-3 text-sm text-slate-700 capitalize">{vehicle.ownership}</td>
                     <td className="py-3 text-sm text-slate-700">
-                      {vehicle.ownership === 'company'
-                        ? (vehicle.allocatedDrivers?.length
-                            ? vehicle.allocatedDrivers.map(driver => driver.name).join(', ')
-                            : '-')
-                        : (vehicle.allocatedUser?.name || '-')}
+                      {vehicle.allocatedUser?.name
+                        || (vehicle.allocatedDrivers?.length
+                          ? vehicle.allocatedDrivers.map(driver => driver.name).join(', ')
+                          : '-')}
                     </td>
                     <td className="py-3 text-sm text-slate-700">{formatDateDisplay(vehicle.dateOfPurchasing)}</td>
                     <td className="py-3 text-sm text-slate-700">{formatDateDisplay(vehicle.dateOfUserAllocation)}</td>
@@ -481,19 +491,38 @@ const VehicleManagement = () => {
                   </div>
                 )}
 
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Vehicle Number</label>
-                  <input
-                    type="text"
-                    value={formData.vehicleNumber}
-                    onChange={(e) => handleChange('vehicleNumber', e.target.value)}
-                    className="input uppercase"
-                    placeholder="VH-2024-001"
-                    required
-                  />
-                </div>
-
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1.5">Vehicle Number</label>
+                    <div className="flex h-[42px] overflow-hidden rounded-lg border border-slate-300 bg-white transition-colors focus-within:border-brand-500 focus-within:ring-2 focus-within:ring-brand-500">
+                      <input
+                        type="text"
+                        value={formData.vehicleNumberLetters}
+                        onChange={(e) => handleChange('vehicleNumberLetters', e.target.value.replace(/[^a-z]/gi, '').slice(0, 3).toUpperCase())}
+                        className="min-w-0 w-[42%] border-0 px-3 py-2 uppercase outline-none"
+                        placeholder="CAA"
+                        aria-label="Vehicle number letters"
+                        maxLength={3}
+                        pattern="[A-Za-z]{1,3}"
+                        title="Enter a maximum of 3 English letters"
+                        required
+                      />
+                      <span className="flex items-center border-x border-slate-200 bg-slate-50 px-3 font-mono font-semibold text-slate-500" aria-hidden="true">-</span>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        value={formData.vehicleNumberDigits}
+                        onChange={(e) => handleChange('vehicleNumberDigits', e.target.value.replace(/\D/g, '').slice(0, 4))}
+                        className="min-w-0 flex-1 border-0 px-3 py-2 font-mono outline-none"
+                        placeholder="1234"
+                        aria-label="Vehicle number digits"
+                        maxLength={4}
+                        pattern="[0-9]{4}"
+                        title="Enter exactly 4 numbers"
+                        required
+                      />
+                    </div>
+                  </div>
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1.5">Make</label>
                     <input
@@ -505,6 +534,9 @@ const VehicleManagement = () => {
                       required
                     />
                   </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1.5">Name</label>
                     <input
@@ -516,34 +548,28 @@ const VehicleManagement = () => {
                       required
                     />
                   </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1.5">Model</label>
-                    <input
-                      type="text"
-                      value={formData.model}
-                      onChange={(e) => handleChange('model', e.target.value)}
-                      className="input"
-                      placeholder="KDH"
-                      required
-                    />
-                  </div>
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1.5">Engine Capacity</label>
-                    <input
-                      type="text"
-                      value={formData.engineCapacity}
-                      onChange={(e) => handleChange('engineCapacity', e.target.value)}
-                      className="input"
-                      placeholder="2500cc"
-                      required
-                    />
+                    <div className="flex h-[42px] overflow-hidden rounded-lg border border-slate-300 bg-white transition-colors focus-within:border-brand-500 focus-within:ring-2 focus-within:ring-brand-500">
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        value={formData.engineCapacity}
+                        onChange={(e) => handleChange('engineCapacity', e.target.value.replace(/\D/g, '').slice(0, 4))}
+                        className="min-w-0 flex-1 border-0 px-3 py-2 font-mono outline-none"
+                        placeholder="1500"
+                        aria-label="Engine capacity"
+                        maxLength={4}
+                        pattern="[0-9]{1,4}"
+                        title="Enter a maximum of 4 numbers"
+                        required
+                      />
+                      <span className="flex items-center border-l border-slate-200 bg-slate-50 px-3 text-sm font-semibold text-slate-500" aria-hidden="true">cc</span>
+                    </div>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1.5">Manufacturing Year</label>
                     <input
@@ -556,6 +582,20 @@ const VehicleManagement = () => {
                       placeholder="2024"
                       required
                     />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1.5">Fuel Type</label>
+                    <select
+                      value={formData.fuelType}
+                      onChange={(e) => handleChange('fuelType', e.target.value)}
+                      className="input"
+                      required
+                    >
+                      <option value="" disabled>Select fuel type</option>
+                      <option value="petrol">Petrol</option>
+                      <option value="diesel">Diesel</option>
+                      <option value="hybrid">Hybrid</option>
+                    </select>
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1.5">Status</label>
@@ -582,82 +622,53 @@ const VehicleManagement = () => {
                         >
                           <option value="company">Company</option>
                           <option value="personal">Personal</option>
+                          <option value="pool">Pool</option>
                         </select>
                       </div>
 
-                      {formData.ownership === 'personal' && (
-                        <div>
-                          <label className="block text-sm font-medium text-slate-700 mb-1.5">Allocated User</label>
-                          <select
-                            value={formData.allocatedUser}
-                            onChange={(e) => handleChange('allocatedUser', e.target.value)}
-                            className="input"
-                          >
-                            <option value="">Unassigned</option>
-                            {assignableUsers.map(user => (
-                              <option key={user._id} value={user._id}>
-                                {user.employeeId ? `${user.employeeId} - ` : ''}{user.name}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      )}
-                    </div>
-
-                    {formData.ownership === 'company' && (
                       <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-1.5">Allocated Drivers</label>
-                        <div className="border border-slate-300 rounded-lg bg-white max-h-40 overflow-y-auto p-2">
-                          {driverUsers.length === 0 ? (
-                            <p className="text-sm text-slate-500 px-2 py-3">No driver-role users available</p>
-                          ) : (
-                            <div className="space-y-1">
-                              {driverUsers.map(driver => (
-                                <label key={driver._id} className="flex items-center gap-3 rounded-md px-2 py-2 hover:bg-slate-50 cursor-pointer">
-                                  <input
-                                    type="checkbox"
-                                    checked={formData.allocatedDrivers.includes(driver._id)}
-                                    onChange={() => handleDriverToggle(driver._id)}
-                                    className="w-4 h-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
-                                  />
-                                  <span className="min-w-0">
-                                    <span className="block text-sm font-medium text-slate-900 truncate">{driver.name}</span>
-                                    <span className="block text-xs text-slate-500 truncate">
-                                      {driver.employeeId ? `${driver.employeeId} - ` : ''}{driver.username}
-                                    </span>
-                                  </span>
-                                </label>
-                              ))}
-                            </div>
-                          )}
-                        </div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1.5">Allocated User</label>
+                        <select
+                          value={formData.allocatedUser}
+                          onChange={(e) => handleChange('allocatedUser', e.target.value)}
+                          className="input"
+                        >
+                          <option value="">Unassigned</option>
+                          {(formData.ownership === 'pool' ? poolAssignableUsers : assignableUsers).map(user => (
+                            <option key={user._id} value={user._id}>
+                              {user.employeeId ? `${user.employeeId} - ` : ''}{user.name}
+                              {formData.ownership === 'pool' ? ` (${user.role === 'driver' ? 'Driver' : 'User'})` : ''}
+                            </option>
+                          ))}
+                        </select>
                       </div>
-                    )}
+                    </div>
                   </>
                 )}
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1.5">Date of Purchasing</label>
-                    <input
-                      type="date"
-                      value={formData.dateOfPurchasing}
-                      onChange={(e) => handleChange('dateOfPurchasing', e.target.value)}
-                      className="input"
-                    />
-                  </div>
-                  {!editingId && (
+                {formData.ownership !== 'personal' && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1.5">Date of Purchasing</label>
+                      <input
+                        type="date"
+                        value={formData.dateOfPurchasing}
+                        onChange={(e) => handleChange('dateOfPurchasing', e.target.value)}
+                        className="input"
+                      />
+                    </div>
                     <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1.5">Date of User Allocation</label>
                       <input
                         type="date"
                         value={formData.dateOfUserAllocation}
                         onChange={(e) => handleChange('dateOfUserAllocation', e.target.value)}
-                        className="input"
+                        className="input disabled:bg-slate-100 disabled:text-slate-500"
+                        disabled={Boolean(editingId)}
                       />
                     </div>
-                  )}
-                </div>
+                  </div>
+                )}
               </div>
 
               <div className="shrink-0 bg-white border-t border-slate-200 px-6 py-4 flex justify-end gap-3">
@@ -694,55 +705,26 @@ const VehicleManagement = () => {
                   </div>
                 )}
 
-                {assignmentForm.ownership === 'personal' ? (
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1.5">Allocated User</label>
-                    <select
-                      value={assignmentForm.allocatedUser}
-                      onChange={(e) => {
-                        setAssignmentForm(prev => ({ ...prev, allocatedUser: e.target.value }));
-                        setReassignmentConflict(null);
-                        setError('');
-                      }}
-                      className="input"
-                    >
-                      <option value="">Unassigned</option>
-                      {assignableUsers.map(user => (
-                        <option key={user._id} value={user._id}>
-                          {user.employeeId ? `${user.employeeId} - ` : ''}{user.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                ) : (
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1.5">Allocated Drivers</label>
-                    <div className="border border-slate-300 rounded-lg bg-white max-h-64 overflow-y-auto p-2">
-                      {driverUsers.length === 0 ? (
-                        <p className="text-sm text-slate-500 px-2 py-3">No driver-role users available</p>
-                      ) : (
-                        <div className="space-y-1">
-                          {driverUsers.map(driver => (
-                            <label key={driver._id} className="flex items-center gap-3 rounded-md px-2 py-2 hover:bg-slate-50 cursor-pointer">
-                              <input
-                                type="checkbox"
-                                checked={assignmentForm.allocatedDrivers.includes(driver._id)}
-                                onChange={() => handleAssignmentDriverToggle(driver._id)}
-                                className="w-4 h-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
-                              />
-                              <span className="min-w-0">
-                                <span className="block text-sm font-medium text-slate-900 truncate">{driver.name}</span>
-                                <span className="block text-xs text-slate-500 truncate">
-                                  {driver.employeeId ? `${driver.employeeId} - ` : ''}{driver.username}
-                                </span>
-                              </span>
-                            </label>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Allocated User</label>
+                  <select
+                    value={assignmentForm.allocatedUser}
+                    onChange={(e) => {
+                      setAssignmentForm(prev => ({ ...prev, allocatedUser: e.target.value }));
+                      setReassignmentConflict(null);
+                      setError('');
+                    }}
+                    className="input"
+                  >
+                    <option value="">Unassigned</option>
+                    {(assignmentForm.ownership === 'pool' ? poolAssignableUsers : assignableUsers).map(user => (
+                      <option key={user._id} value={user._id}>
+                        {user.employeeId ? `${user.employeeId} - ` : ''}{user.name}
+                        {assignmentForm.ownership === 'pool' ? ` (${user.role === 'driver' ? 'Driver' : 'User'})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
 
               <div className="border-t border-slate-200 px-6 py-4 flex justify-end gap-3">

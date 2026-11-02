@@ -20,7 +20,10 @@ const toAssignedVehicle = (vehicle) => ({
 const getAssignedVehicles = async (user) => {
   if (user.role === 'driver') {
     const vehicles = await Vehicle.find({
-      allocatedDrivers: user._id,
+      $or: [
+        { allocatedDrivers: user._id },
+        { ownership: 'pool', allocatedUser: user._id }
+      ],
       status: 'active'
     })
       .sort({ vehicleNumber: 1 })
@@ -80,6 +83,10 @@ router.post('/login', async (req, res) => {
 
     if (!loginId || !password) {
       return res.status(400).json({ error: 'Username/email and password are required' });
+    }
+
+    if (loginId === 'non') {
+      return res.status(401).json({ error: 'A vehicle must be assigned before using this username' });
     }
 
     const user = await User.findOne({
