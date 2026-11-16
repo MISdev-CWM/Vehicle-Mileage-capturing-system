@@ -8,28 +8,21 @@ template. The backend reads `AUTH_TOKEN_SECRET` for signing tokens. Keep all
 backend secrets on the server and configure production values using your hosting
 provider's environment-variable settings.
 
-## Google Drive meter photos
+## Cloudinary meter photos
 
-Meter photos are uploaded to a private Google Drive folder. The database stores
-the Drive file ID; image requests are served by the backend only to admin and
-superadmin accounts. Uploaded image filenames contain the vehicle number,
-authenticated username, and UTC date/time (for example,
-`ABC-123_jane_doe_2026-11-10_09-19-52-622Z.jpg`).
+Meter photos are uploaded to Cloudinary as authenticated images. The database
+stores the Cloudinary public ID; image requests are served by the backend only
+to admin and superadmin accounts. Uploaded image filenames contain the vehicle
+number, authenticated username, and UTC date/time.
 
-1. Enable the Google Drive API in the Google Cloud project associated with the
-   existing OAuth client.
-2. Obtain a refresh token for the Google account that owns or has edit access
-   to the private Drive folder. The OAuth grant must include the
-   `https://www.googleapis.com/auth/drive` scope.
-3. Configure `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
-   `GOOGLE_DRIVE_REFRESH_TOKEN`, and `DRIVE_FOLDER_ID` in the backend
-   environment. See `.env.example`. `GOOGLE_REDIRECT_URI` is optional and is
-   only needed if it was part of the OAuth refresh-token flow.
+Configure `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, and
+`CLOUDINARY_API_SECRET` in the backend environment. Set
+`CLOUDINARY_METER_IMAGE_FOLDER` to choose the Cloudinary Media Library folder;
+it defaults to `meter-photos`. See `.env.example`. Keep these credentials on
+the server and do not expose them to the frontend.
 
-Keep the Drive folder private. The backend returns a clear upload error if the
-OAuth credentials are missing or the account cannot access the folder. Keep
-OAuth secrets in the backend environment only; do not expose them to the
-frontend or commit them to source control.
+Images previously stored in Google Drive are not migrated automatically; their
+photos need to be uploaded again to become available from Cloudinary.
 
 ## Monthly mileage reminder emails
 

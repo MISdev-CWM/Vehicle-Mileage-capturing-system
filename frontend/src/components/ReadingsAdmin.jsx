@@ -146,7 +146,7 @@ const ReadingsAdmin = () => {
       setPhotoReading(reading);
       setPhotoUrl(URL.createObjectURL(response.data));
     } catch (err) {
-      setPhotoError(err.response?.data?.error || 'Failed to load meter photo from Google Drive.');
+      setPhotoError(err.response?.data?.error || 'Failed to load meter photo from Cloudinary.');
     } finally {
       setPhotoLoadingId('');
     }

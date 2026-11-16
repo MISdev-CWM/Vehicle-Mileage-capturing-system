@@ -364,7 +364,7 @@ const EmployeeManagement = () => {
                     <option value="user">User</option>
                     <option value="driver">Driver</option>
                     <option value="admin">Admin</option>
-                    <option value="superadmin">Super Admin</option>
+                    {isSuperadmin(currentUserRole) && <option value="superadmin">Super Admin</option>}
                   </select>
                 </div>
 
@@ -491,4 +491,3 @@ const EmployeeManagement = () => {
 };
 
 export default EmployeeManagement;
-
