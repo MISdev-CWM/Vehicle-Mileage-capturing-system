@@ -59,18 +59,17 @@ app.use('/api/readings', require('./routes/readings'));
 app.use('/api/fuel-usage', require('./routes/fuelUsage'));
 
 app.get('/api/health', (req, res) => {
-  const missingDriveConfiguration = [
-    !process.env.GOOGLE_CLIENT_ID && 'GOOGLE_CLIENT_ID',
-    !process.env.GOOGLE_CLIENT_SECRET && 'GOOGLE_CLIENT_SECRET',
-    !process.env.GOOGLE_DRIVE_REFRESH_TOKEN && 'GOOGLE_DRIVE_REFRESH_TOKEN',
-    !process.env.DRIVE_FOLDER_ID && 'DRIVE_FOLDER_ID'
+  const missingCloudinaryConfiguration = [
+    !process.env.CLOUDINARY_CLOUD_NAME && 'CLOUDINARY_CLOUD_NAME',
+    !process.env.CLOUDINARY_API_KEY && 'CLOUDINARY_API_KEY',
+    !process.env.CLOUDINARY_API_SECRET && 'CLOUDINARY_API_SECRET'
   ].filter(Boolean);
 
   res.json({ 
     status: 'OK',
-    imageStorage: 'Google Drive',
-    googleDriveConfigured: missingDriveConfiguration.length === 0,
-    missingDriveConfiguration
+    imageStorage: 'Cloudinary',
+    cloudinaryConfigured: missingCloudinaryConfiguration.length === 0,
+    missingCloudinaryConfiguration
   });
 });
 

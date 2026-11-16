@@ -170,6 +170,11 @@ router.get('/', async (req, res) => {
 router.post('/', async (req, res) => {
   try {
     const payload = normalizeUserInput(req.body);
+
+    if (isSuperadmin(payload.role) && !isSuperadmin(req.user.role)) {
+      return res.status(403).json({ error: 'Only a super admin can create super admin users' });
+    }
+
     const validationError = validateUser(payload, req.body.password);
 
     if (validationError) {
@@ -212,6 +217,11 @@ router.put('/:id', async (req, res) => {
     }
 
     const payload = normalizeUserInput(req.body, existingUser);
+
+    if (isSuperadmin(payload.role) && !isSuperadmin(req.user.role)) {
+      return res.status(403).json({ error: 'Only a super admin can assign the super admin role' });
+    }
+
     const validationError = validateUser(payload, req.body.password, true);
 
     if (validationError) {
