@@ -365,7 +365,8 @@ const createRangeUsage = (readings, userMap) => {
             vehicleNumber: entry.vehicleNumber,
             firstReading: entry,
             lastReading: entry,
-            readingCount: 1
+            readingCount: 1,
+            readings: [entry]
           };
           sessions.push(currentSession);
           return;
@@ -373,6 +374,7 @@ const createRangeUsage = (readings, userMap) => {
 
         currentSession.lastReading = entry;
         currentSession.readingCount += 1;
+        currentSession.readings.push(entry);
       });
 
     return sessions;
@@ -392,6 +394,24 @@ const createRangeUsage = (readings, userMap) => {
       startReadingAt: session.firstReading.readingDate,
       endReadingAt: session.lastReading.readingDate,
       readingCount: session.readingCount,
+      readings: session.readings.map((entry, index) => {
+        const previousEntry = session.readings[index - 1];
+
+        return {
+          id: entry.reading._id,
+          readingAt: entry.readingDate,
+          mileage: entry.reading.extractedMileage,
+          gapFromPrevious: previousEntry
+            ? Math.round(entry.reading.extractedMileage - previousEntry.reading.extractedMileage)
+            : null,
+          ocrConfidence: entry.reading.ocrConfidence,
+          isCorrected: entry.reading.isCorrected,
+          originalMileage: entry.reading.originalMileage,
+          divisionName: entry.reading.divisionName || '',
+          reason: entry.reading.reason || '',
+          meterType: entry.reading.meterType || null
+        };
+      }),
       distance: Math.round(
         session.lastReading.reading.extractedMileage
         - session.firstReading.reading.extractedMileage
@@ -399,6 +419,62 @@ const createRangeUsage = (readings, userMap) => {
     }))
     .filter(usage => usage.distance >= 0)
     .sort((left, right) => right.distance - left.distance || left.name.localeCompare(right.name));
+};
+
+const createOwnershipUserMileage = (readings, userMap, vehicleMap) => {
+  const ownershipGroups = {
+    pool: new Map(),
+    company: new Map(),
+    personal: new Map()
+  };
+
+  createRangeUsage(readings, userMap).forEach(usage => {
+    const ownership = vehicleMap.get(usage.vehicleNumber)?.ownership;
+    const group = ownershipGroups[ownership];
+
+    if (!group) {
+      return;
+    }
+
+    const current = group.get(usage.operatorKey) || {
+      operatorKey: usage.operatorKey,
+      name: usage.name,
+      employeeId: usage.employeeId,
+      username: usage.username,
+      role: usage.role,
+      distance: 0,
+      readingCount: 0,
+      vehicles: new Set(),
+      vehicleMileage: new Map()
+    };
+
+    current.distance += usage.distance;
+    current.readingCount += usage.readingCount;
+    current.vehicles.add(usage.vehicleNumber);
+    const vehicleMileage = current.vehicleMileage.get(usage.vehicleNumber) || {
+      vehicleNumber: usage.vehicleNumber,
+      distance: 0,
+      readingCount: 0
+    };
+    vehicleMileage.distance += usage.distance;
+    vehicleMileage.readingCount += usage.readingCount;
+    current.vehicleMileage.set(usage.vehicleNumber, vehicleMileage);
+    group.set(usage.operatorKey, current);
+  });
+
+  return Object.fromEntries(Object.entries(ownershipGroups).map(([ownership, group]) => [
+    ownership,
+    Array.from(group.values())
+      .map(({ vehicleMileage, ...row }) => ({
+        ...row,
+        distance: Math.round(row.distance),
+        vehicles: Array.from(row.vehicles).sort(),
+        vehicleMileage: Array.from(vehicleMileage.values())
+          .map(vehicle => ({ ...vehicle, distance: Math.round(vehicle.distance) }))
+          .sort((left, right) => left.vehicleNumber.localeCompare(right.vehicleNumber))
+      }))
+      .sort((left, right) => right.distance - left.distance || left.name.localeCompare(right.name))
+  ]));
 };
 
 const getColomboDateKey = (value) => {
@@ -470,7 +546,7 @@ router.get('/analytics', async (req, res) => {
     const [readings, vehicles, users, companyDriverCount] = await Promise.all([
       Reading.find()
         .sort({ vehicleId: 1, readingDate: 1 })
-        .select('vehicleId extractedMileage ocrConfidence readingDate isCorrected submittedBy driverName'),
+        .select('vehicleId extractedMileage ocrConfidence readingDate isCorrected originalMileage submittedBy driverName divisionName reason meterType'),
       Vehicle.find().sort({ vehicleNumber: 1 }).select('-__v'),
       User.find().select('name employeeId username role isActive'),
       CompanyDriver.countDocuments()
@@ -593,6 +669,18 @@ router.get('/analytics', async (req, res) => {
       : [];
     const rangeUsage = createRangeUsage(rangeReadings, userMap);
     const rangeDistance = rangeUsage.reduce((total, usage) => total + usage.distance, 0);
+    const monthReadings = readings.filter(reading => {
+      const readingDate = new Date(reading.readingDate);
+      return readingDate >= selectedMonthStart && readingDate < nextMonthStart;
+    });
+    const ownershipUserMileage = createOwnershipUserMileage(monthReadings, userMap, vehicleMap);
+    const ownershipVehicleNumbers = { pool: [], company: [], personal: [] };
+    vehicles.forEach(vehicle => {
+      if (ownershipVehicleNumbers[vehicle.ownership]) {
+        ownershipVehicleNumbers[vehicle.ownership].push(vehicle.vehicleNumber);
+      }
+    });
+    Object.values(ownershipVehicleNumbers).forEach(vehicleNumbers => vehicleNumbers.sort());
     const latestRecordingDay = getLatestRecordingDaySummary(readings);
 
     const activeVehicles = vehicles.filter(vehicle => vehicle.status === 'active').length;
@@ -608,6 +696,7 @@ router.get('/analytics', async (req, res) => {
         startDate: requestedStartDate || null,
         endDate: requestedEndDate || null
       },
+      selectedMonth,
       kpis: {
         totalVehicles: vehicles.length,
         activeVehicles,
@@ -626,6 +715,8 @@ router.get('/analytics', async (req, res) => {
       },
       vehicleUsage,
       operatorUsage,
+      ownershipUserMileage,
+      ownershipVehicleNumbers,
       rangeUsage
     });
   } catch (error) {
