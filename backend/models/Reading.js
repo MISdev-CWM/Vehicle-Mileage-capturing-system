@@ -12,28 +12,31 @@ const readingSchema = new mongoose.Schema({
     required: true,
     min: 0
   },
-  rawOcrText: {
+  meterImageDriveId: {
     type: String,
-    default: ''
+    default: null,
+    select: false
   },
-  ocrConfidence: {
-    type: Number,
-    min: 0,
-    max: 1,
-    default: 0
+  meterImageContentType: {
+    type: String,
+    select: false
+  },
+  hasMeterImage: {
+    type: Boolean,
+    default: false
   },
   readingDate: {
     type: Date,
     default: Date.now
   },
-  // User can correct the value before final save
+  // An administrator can mark a correction to the saved value
   isCorrected: {
     type: Boolean,
     default: false
   },
   originalMileage: {
     type: Number,
-    default: null  // Stores OCR original if user corrects it
+    default: null
   },
   location: {
     latitude: Number,
@@ -69,6 +72,10 @@ const readingSchema = new mongoose.Schema({
     type: String,
     enum: ['out', 'in', null],
     default: null
+  },
+  isRental: {
+    type: Boolean,
+    default: false
   }
 }, { timestamps: true });
 

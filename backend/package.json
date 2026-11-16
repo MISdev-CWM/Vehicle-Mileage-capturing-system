@@ -1,20 +1,21 @@
 {
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "nodemon server.js",
+    "reminders:mileage": "node scripts/sendMileageReminders.js"
   },
   "engines": {
     "node": ">=20.19.0"
   },
   "dependencies": {
-    "axios": "^1.19.0",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "exceljs": "^4.4.0",
     "express": "^5.2.1",
+    "googleapis": "^189.0.0",
     "mongoose": "^9.9.3",
     "multer": "^2.2.0",
-    "tesseract.js": "^7.0.0"
+    "nodemailer": "^10.5.0"
   },
   "devDependencies": {
     "nodemon": "^3.1.14"

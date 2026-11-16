@@ -81,6 +81,45 @@ const getDefaultDateRange = () => {
   };
 };
 
+const getMonthDateRange = (month) => {
+  const [year, monthNumber] = month.split('-').map(Number);
+  const start = new Date(year, monthNumber - 1, 1);
+  const end = new Date(year, monthNumber, 0);
+  const today = new Date();
+
+  if (end > today) {
+    end.setTime(today.getTime());
+  }
+
+  return {
+    startDate: getDateInputValue(start),
+    endDate: getDateInputValue(end)
+  };
+};
+
+const getInclusiveDateCount = (startDate, endDate) => {
+  if (!startDate || !endDate) {
+    return 0;
+  }
+
+  const [startYear, startMonth, startDay] = startDate.split('-').map(Number);
+  const [endYear, endMonth, endDay] = endDate.split('-').map(Number);
+  const start = Date.UTC(startYear, startMonth - 1, startDay);
+  const end = Date.UTC(endYear, endMonth - 1, endDay);
+
+  return Math.floor((end - start) / 86400000) + 1;
+};
+
+const getMaximumRangeEndDate = (startDate) => {
+  if (!startDate) {
+    return undefined;
+  }
+
+  const [year, month, day] = startDate.split('-').map(Number);
+  const maximumDate = new Date(Date.UTC(year, month - 1, day + 59));
+  return maximumDate.toISOString().slice(0, 10);
+};
+
 const exportUserReport = (rows, startDate, endDate) => {
   const headers = ['User', 'Employee ID', 'Vehicle', 'First recording', 'Last recording', 'Start mileage (km)', 'End mileage (km)', 'Mileage gap (km)', 'Recordings'];
   const csvRows = rows.map(row => [
@@ -269,364 +308,95 @@ const DateRangeFilter = ({ filters, onChange, onSubmit, error, searching }) => (
   </div>
 );
 
-const ownershipChartStyles = {
-  pool: {
-    label: 'Pool',
-    badge: 'border-blue-100 bg-blue-50 text-blue-700',
-    accent: 'bg-blue-600',
-    surface: 'from-blue-50/80'
-  },
-  company: {
-    label: 'Company',
-    badge: 'border-teal-100 bg-teal-50 text-teal-700',
-    accent: 'bg-teal-600',
-    surface: 'from-teal-50/80'
-  },
-  personal: {
-    label: 'Personal',
-    badge: 'border-violet-100 bg-violet-50 text-violet-700',
-    accent: 'bg-violet-600',
-    surface: 'from-violet-50/80'
-  }
-};
-
-const professionalUserColors = [
-  '#1d4ed8', '#0f766e', '#4338ca', '#0369a1', '#047857', '#6d28d9',
-  '#9f1239', '#a16207', '#334155', '#0e7490', '#5b21b6', '#be123c',
-  '#166534', '#c2410c', '#1e40af', '#115e59', '#3730a3', '#075985',
-  '#15803d', '#7e22ce', '#9f1239', '#92400e', '#475569', '#155e75'
-];
-
-const getStableUserColor = (userKey = '') => {
-  const hash = Array.from(String(userKey)).reduce(
-    (value, character) => ((value * 31) + character.charCodeAt(0)) >>> 0,
-    0
-  );
-
-  return professionalUserColors[hash % professionalUserColors.length];
-};
-
-const getFirstName = (name = '') => String(name).trim().split(/\s+/)[0] || 'Unknown';
-
-const flattenOwnershipMileage = (rows) => rows
-  .flatMap(row => (row.vehicleMileage || []).map(vehicle => ({
-    operatorKey: row.operatorKey,
-    name: row.name,
-    employeeId: row.employeeId,
-    username: row.username,
-    role: row.role,
-    vehicleNumber: vehicle.vehicleNumber,
-    distance: vehicle.distance,
-    readingCount: vehicle.readingCount
-  })))
-  .sort((left, right) => right.distance - left.distance
-    || left.name.localeCompare(right.name)
-    || left.vehicleNumber.localeCompare(right.vehicleNumber));
-
-const OwnershipMileageChart = ({ ownership, rows, onExpand, expanded = false }) => {
-  const style = ownershipChartStyles[ownership];
-  const [searchTerm, setSearchTerm] = useState('');
-  const [recordLimit, setRecordLimit] = useState(expanded ? '20' : '10');
-  const records = useMemo(() => flattenOwnershipMileage(rows), [rows]);
-  const totalDistance = records.reduce((total, record) => total + record.distance, 0);
-  const normalizedSearch = searchTerm.trim().toLowerCase();
-  const filteredRecords = records.filter(record => (
-    !normalizedSearch
-    || record.name?.toLowerCase().includes(normalizedSearch)
-    || record.employeeId?.toLowerCase().includes(normalizedSearch)
-    || record.username?.toLowerCase().includes(normalizedSearch)
-    || record.vehicleNumber?.toLowerCase().includes(normalizedSearch)
+const SearchableDropdown = ({ label, value, options, placeholder, onChange }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const dropdownRef = useRef(null);
+  const selectedOption = options.find(option => option.value === value);
+  const filteredOptions = options.filter(option => (
+    option.label.toLowerCase().includes(search.trim().toLowerCase())
   ));
-  const visibleRecords = recordLimit === 'all'
-    ? filteredRecords
-    : filteredRecords.slice(0, Number(recordLimit));
-  const maximumDistance = Math.max(...filteredRecords.map(record => record.distance), 1);
+
+  useEffect(() => {
+    if (!isOpen) {
+      return undefined;
+    }
+
+    const closeOnOutsideClick = (event) => {
+      if (!dropdownRef.current?.contains(event.target)) {
+        setIsOpen(false);
+        setSearch('');
+      }
+    };
+
+    document.addEventListener('mousedown', closeOnOutsideClick);
+    return () => document.removeEventListener('mousedown', closeOnOutsideClick);
+  }, [isOpen]);
+
+  const selectOption = (optionValue) => {
+    onChange(optionValue);
+    setIsOpen(false);
+    setSearch('');
+  };
 
   return (
-    <article className={`min-w-0 bg-gradient-to-b ${style.surface} to-white ${expanded ? 'px-7 py-6' : 'px-5 py-5'}`}>
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className={`h-2.5 w-2.5 rounded-full ${style.accent}`} aria-hidden="true" />
-            <h4 className="text-base font-semibold text-slate-950">{style.label} vehicles</h4>
-            <span className={`rounded-md border px-2 py-0.5 text-[11px] font-semibold ${style.badge}`}>{records.length} records</span>
+    <div className="relative text-xs font-semibold text-slate-600" ref={dropdownRef}>
+      <span className="block">{label}</span>
+      <button
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded={isOpen}
+        onClick={() => setIsOpen(open => !open)}
+        className="input mt-1 flex h-10 w-full items-center justify-between gap-2 text-left text-sm font-normal"
+      >
+        <span className={selectedOption ? 'truncate text-slate-900' : 'truncate text-slate-500'}>
+          {selectedOption?.label || placeholder}
+        </span>
+        <svg className="h-4 w-4 shrink-0 text-slate-500" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+          <path fillRule="evenodd" d="M5.22 7.22a.75.75 0 011.06 0L10 10.94l3.72-3.72a.75.75 0 111.06 1.06l-4.25 4.25a.75.75 0 01-1.06 0L5.22 8.28a.75.75 0 010-1.06z" clipRule="evenodd" />
+        </svg>
+      </button>
+      {isOpen && (
+        <div className="absolute left-0 right-0 top-full z-30 mt-1 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg">
+          <div className="border-b border-slate-100 p-2">
+            <input
+              type="search"
+              value={search}
+              onChange={event => setSearch(event.target.value)}
+              onKeyDown={event => {
+                if (event.key === 'Escape') {
+                  setIsOpen(false);
+                  setSearch('');
+                }
+              }}
+              placeholder={`Search ${label.toLowerCase()}...`}
+              aria-label={`Search ${label.toLowerCase()}`}
+              autoFocus
+              className="input h-9 w-full text-sm font-normal"
+            />
           </div>
-          <p className="mt-1 text-xs text-slate-500">{formatKm(totalDistance)} total monthly mileage</p>
-        </div>
-        {!expanded && (
-          <button
-            type="button"
-            onClick={onExpand}
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 shadow-sm transition-colors hover:border-brand-300 hover:bg-brand-50 hover:text-brand-700"
-            aria-label={`Open ${style.label} chart in full screen`}
-            title="Open full screen"
-          >
-            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 3H3v5m13-5h5v5M8 21H3v-5m18 0v5h-5" />
-            </svg>
-          </button>
-        )}
-      </div>
-
-      {records.length === 0 ? (
-        <div className={`flex items-center justify-center text-center ${expanded ? 'h-[calc(100vh-13rem)] min-h-[420px]' : 'h-80'}`}>
-          <div>
-            <p className="text-sm font-semibold text-slate-700">No mileage recorded</p>
-            <p className="mt-1 text-xs text-slate-500">No user has two readings for this ownership type.</p>
+          <div role="listbox" aria-label={label} className="max-h-52 overflow-y-auto p-1">
+            {filteredOptions.length ? filteredOptions.map(option => (
+              <button
+                type="button"
+                role="option"
+                aria-selected={option.value === value}
+                key={option.value || 'all'}
+                onClick={() => selectOption(option.value)}
+                className={`w-full rounded-md px-3 py-2 text-left text-sm font-normal hover:bg-slate-100 ${
+                  option.value === value ? 'bg-brand-50 text-brand-700' : 'text-slate-700'
+                }`}
+              >
+                {option.label}
+              </button>
+            )) : (
+              <p className="px-3 py-2 text-sm font-normal text-slate-500">No matches found.</p>
+            )}
           </div>
-        </div>
-      ) : (
-        <div className="mt-4">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-            <label className="relative min-w-0 flex-1">
-              <span className="sr-only">Search {style.label} users or vehicles</span>
-              <svg className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m21 21-4.35-4.35m1.35-5.65a7 7 0 1 1-14 0 7 7 0 0 1 14 0Z" />
-              </svg>
-              <input
-                type="search"
-                value={searchTerm}
-                onChange={event => setSearchTerm(event.target.value)}
-                placeholder="Search user or vehicle"
-                className="input h-9 w-full pl-9 text-xs"
-              />
-            </label>
-            <label className="flex shrink-0 items-center gap-2 text-xs font-medium text-slate-500">
-              Show
-              <select value={recordLimit} onChange={event => setRecordLimit(event.target.value)} className="input h-9 w-24 py-1 text-xs">
-                <option value="10">Top 10</option>
-                <option value="20">Top 20</option>
-                <option value="all">All</option>
-              </select>
-            </label>
-          </div>
-
-          <div className="mt-3 flex items-center justify-between text-[10px] font-medium uppercase tracking-wider text-slate-400">
-            <span>{visibleRecords.length} of {filteredRecords.length} records</span>
-            <span>Monthly mileage</span>
-          </div>
-
-          {visibleRecords.length === 0 ? (
-            <div className="mt-3 flex h-56 items-center justify-center rounded-lg border border-dashed border-slate-200 bg-white/70 text-center">
-              <div>
-                <p className="text-sm font-semibold text-slate-700">No matching records</p>
-                <p className="mt-1 text-xs text-slate-500">Try a different user or vehicle number.</p>
-              </div>
-            </div>
-          ) : (
-            <div className={`mt-2 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-sm ${expanded ? 'max-h-[calc(100vh-17rem)]' : 'max-h-[390px]'}`}>
-              <div className={`sticky top-0 z-10 grid items-center gap-3 border-b border-slate-200 bg-slate-50/95 px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500 backdrop-blur ${expanded ? 'grid-cols-[minmax(9rem,13rem)_minmax(14rem,1fr)_7rem]' : 'grid-cols-[minmax(5.5rem,7rem)_minmax(5rem,1fr)_6rem]'}`}>
-                <span>User</span>
-                <span className="flex justify-between"><span>0</span><span>{formatNumber(maximumDistance / 2)}</span><span>{formatNumber(maximumDistance)} km</span></span>
-                <span className="text-right">Distance / vehicle</span>
-              </div>
-              <div className="divide-y divide-slate-100">
-                {visibleRecords.map(record => {
-                  const userColor = getStableUserColor(record.operatorKey || record.employeeId || record.name);
-                  const percentage = Math.min(98.5, Math.max(1.5, (record.distance / maximumDistance) * 100));
-                  const detailText = `${record.name} | ${record.vehicleNumber} | ${formatKm(record.distance)} | ${record.readingCount} readings`;
-
-                  return (
-                    <div
-                      key={`${record.operatorKey}-${record.vehicleNumber}`}
-                      className={`group grid items-center gap-3 px-3 py-3 transition-colors hover:bg-slate-50 ${expanded ? 'grid-cols-[minmax(9rem,13rem)_minmax(14rem,1fr)_7rem]' : 'grid-cols-[minmax(5.5rem,7rem)_minmax(5rem,1fr)_6rem]'}`}
-                      title={detailText}
-                    >
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="h-2.5 w-2.5 shrink-0 rounded-full ring-2 ring-white" style={{ backgroundColor: userColor }} aria-hidden="true" />
-                          <span className="truncate text-xs font-semibold text-slate-900" title={record.name}>{getFirstName(record.name)}</span>
-                        </div>
-                      </div>
-                      <div className="relative h-7" aria-label={detailText}>
-                        <div className="absolute left-0 right-0 top-1/2 h-px -translate-y-1/2 bg-slate-200" />
-                        <div className="absolute left-1/2 top-1 h-5 border-l border-dashed border-slate-200" />
-                        <div
-                          className="absolute left-0 top-1/2 h-0.5 -translate-y-1/2 rounded-full transition-all duration-300"
-                          style={{ width: `${percentage}%`, backgroundColor: userColor }}
-                        />
-                        <span
-                          className="absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white shadow-md ring-1 ring-slate-200 transition-transform group-hover:scale-125"
-                          style={{ left: `${percentage}%`, backgroundColor: userColor }}
-                        />
-                      </div>
-                      <div className="text-right">
-                        <span className="block whitespace-nowrap font-mono text-xs font-bold text-slate-900">{formatNumber(record.distance)} km</span>
-                        <span className="mt-1 block truncate font-mono text-[10px] font-semibold text-slate-500" title={record.vehicleNumber}>{record.vehicleNumber}</span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          <p className="mt-3 text-[11px] leading-4 text-slate-500">
-            Each user keeps the same professional color across ownership charts. Hover a record to view its exact vehicle, mileage, and reading count.
-          </p>
         </div>
       )}
-    </article>
+    </div>
   );
-};
-
-const OwnershipMileageModal = ({ ownership, rows, month, onClose }) => {
-  const style = ownershipChartStyles[ownership];
-
-  useEffect(() => {
-    const previousOverflow = document.body.style.overflow;
-    const handleKeyDown = (event) => {
-      if (event.key === 'Escape') {
-        onClose();
-      }
-    };
-
-    document.body.style.overflow = 'hidden';
-    window.addEventListener('keydown', handleKeyDown);
-
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [onClose]);
-
-  return createPortal((
-    <div
-      className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-950/80 p-2 backdrop-blur-sm sm:p-4"
-      role="presentation"
-      onMouseDown={event => {
-        if (event.target === event.currentTarget) {
-          onClose();
-        }
-      }}
-    >
-      <div className="flex h-full w-full flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="ownership-chart-modal-title">
-        <div className="flex shrink-0 items-center justify-between gap-4 border-b border-slate-200 px-6 py-4">
-          <div>
-            <h3 id="ownership-chart-modal-title" className="text-lg font-semibold text-slate-950">{style.label} vehicle mileage ranking</h3>
-            <p className="mt-1 text-sm text-slate-500">Ranked user and vehicle mileage for {month}</p>
-          </div>
-          <button type="button" onClick={onClose} className="btn-secondary shrink-0 px-3 py-1.5 text-sm">Close</button>
-        </div>
-        <div className="min-h-0 flex-1 overflow-auto">
-          <OwnershipMileageChart ownership={ownership} rows={rows} expanded />
-        </div>
-      </div>
-    </div>
-  ), document.body);
-};
-
-const ReadingDetailsModal = ({ usage, onClose }) => {
-  useEffect(() => {
-    const previousOverflow = document.body.style.overflow;
-    const handleKeyDown = (event) => {
-      if (event.key === 'Escape') {
-        onClose();
-      }
-    };
-
-    document.body.style.overflow = 'hidden';
-    window.addEventListener('keydown', handleKeyDown);
-
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [onClose]);
-
-  const readings = usage.readings || [];
-
-  return createPortal((
-    <div
-      className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-950/75 px-4 py-6 backdrop-blur-sm"
-      role="presentation"
-      onMouseDown={event => {
-        if (event.target === event.currentTarget) {
-          onClose();
-        }
-      }}
-    >
-      <div className="flex max-h-[calc(100vh-3rem)] w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="reading-details-title">
-        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-slate-200 px-6 py-5">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <h3 id="reading-details-title" className="text-lg font-semibold text-slate-950">{usage.name}</h3>
-              <span className="rounded-md bg-brand-50 px-2 py-1 font-mono text-xs font-semibold text-brand-700">{usage.vehicleNumber}</span>
-            </div>
-            <p className="mt-1 text-sm text-slate-500">
-              {usage.employeeId || usage.username || usage.role} | Complete reading history for this recording gap
-            </p>
-          </div>
-          <button type="button" onClick={onClose} className="btn-secondary shrink-0 px-3 py-1.5 text-sm">Close</button>
-        </div>
-
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          <div className="grid grid-cols-1 gap-3 border-b border-slate-200 bg-slate-50 px-6 py-4 sm:grid-cols-3">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Total gap</p>
-              <p className="mt-1 text-xl font-bold text-brand-700">{formatKm(usage.distance)}</p>
-            </div>
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Recordings</p>
-              <p className="mt-1 text-xl font-bold text-slate-950">{formatNumber(usage.readingCount)}</p>
-            </div>
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Reading period</p>
-              <p className="mt-1 text-sm font-semibold text-slate-800">{formatReadingDetailTime(usage.startReadingAt)}</p>
-              <p className="mt-0.5 text-xs text-slate-500">to {formatReadingDetailTime(usage.endReadingAt)}</p>
-            </div>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[850px]">
-              <thead className="sticky top-0 z-10">
-                <tr className="border-b border-slate-200 bg-white">
-                  <th className="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Reading</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Recorded at</th>
-                  <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500">Odometer</th>
-                  <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500">Gap</th>
-                  <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500">OCR confidence</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Details</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {readings.map((reading, index) => {
-                  const context = [
-                    reading.meterType ? `Meter ${reading.meterType}` : '',
-                    reading.divisionName,
-                    reading.reason
-                  ].filter(Boolean);
-
-                  return (
-                    <tr key={reading.id || `${reading.readingAt}-${index}`} className="align-top hover:bg-slate-50">
-                      <td className="px-6 py-4">
-                        <span className="inline-flex h-7 min-w-7 items-center justify-center rounded-md bg-slate-100 px-2 text-xs font-bold text-slate-700">{index + 1}</span>
-                      </td>
-                      <td className="px-4 py-4 text-sm font-medium text-slate-800 whitespace-nowrap">{formatReadingDetailTime(reading.readingAt)}</td>
-                      <td className="px-4 py-4 text-right font-mono text-sm font-semibold text-slate-950 whitespace-nowrap">{formatKm(reading.mileage)}</td>
-                      <td className={`px-4 py-4 text-right font-mono text-sm font-semibold whitespace-nowrap ${reading.gapFromPrevious < 0 ? 'text-red-600' : 'text-brand-700'}`}>
-                        {reading.gapFromPrevious == null ? '-' : formatKm(reading.gapFromPrevious)}
-                      </td>
-                      <td className="px-4 py-4 text-right font-mono text-sm text-slate-700">{formatConfidence(reading.ocrConfidence)}</td>
-                      <td className="px-4 py-4">
-                        <p className={`text-xs font-semibold ${reading.isCorrected ? 'text-amber-700' : 'text-emerald-700'}`}>
-                          {reading.isCorrected ? 'Corrected' : 'OCR reading'}
-                        </p>
-                        {reading.isCorrected && reading.originalMileage != null && (
-                          <p className="mt-1 text-xs text-slate-500">Original: {formatKm(reading.originalMileage)}</p>
-                        )}
-                        {context.length > 0 && <p className="mt-1 text-xs text-slate-500">{context.join(' | ')}</p>}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-    </div>
-  ), document.body);
 };
 
 const AnalyticsDashboard = () => {
@@ -655,7 +425,13 @@ const AnalyticsDashboard = () => {
   const [reportRange, setReportRange] = useState(() => getDefaultDateRange());
   const [reportUsage, setReportUsage] = useState([]);
   const [reportError, setReportError] = useState('');
-  const [operatorFilters, setOperatorFilters] = useState(() => getDefaultDateRange());
+  const [operatorFilters, setOperatorFilters] = useState(() => ({
+    category: '',
+    vehicleNumber: '',
+    period: 'monthly',
+    month: getCurrentMonth(),
+    ...getDefaultDateRange()
+  }));
   const [operatorUsage, setOperatorUsage] = useState([]);
   const [operatorError, setOperatorError] = useState('');
   const [contributionFilters, setContributionFilters] = useState(() => getDefaultDateRange());
@@ -766,8 +542,8 @@ const AnalyticsDashboard = () => {
     fetchOwnershipMileage(ownershipMonth);
   };
 
-  const fetchRangeUsage = useCallback(async (range) => {
-    const res = await api.get('/admin/analytics', { params: range });
+  const fetchRangeUsage = useCallback(async (filters) => {
+    const res = await api.get('/admin/analytics', { params: filters });
     return res.data.rangeUsage || [];
   }, []);
 
@@ -821,6 +597,11 @@ const AnalyticsDashboard = () => {
       return;
     }
 
+    if (getInclusiveDateCount(filters.startDate, filters.endDate) > 60) {
+      setSectionError('Date range cannot exceed 60 days.');
+      return;
+    }
+
     setSectionError('');
     setSearchingSection(section);
     try {
@@ -836,7 +617,63 @@ const AnalyticsDashboard = () => {
     }
   };
 
+  const searchOperatorUsage = async (event) => {
+    event.preventDefault();
+
+    if (operatorFilters.period === 'monthly' && !operatorFilters.month) {
+      setOperatorError('Select a month.');
+      return;
+    }
+
+    const range = operatorFilters.period === 'custom'
+      ? { startDate: operatorFilters.startDate, endDate: operatorFilters.endDate }
+      : getMonthDateRange(operatorFilters.month);
+
+    if (!range.startDate || !range.endDate) {
+      setOperatorError(operatorFilters.period === 'custom'
+        ? 'Select both a start date and an end date.'
+        : 'Select a month.');
+      return;
+    }
+
+    if (range.startDate > range.endDate) {
+      setOperatorError('End date must be on or after start date.');
+      return;
+    }
+
+    if (getInclusiveDateCount(range.startDate, range.endDate) > 60) {
+      setOperatorError('Date range cannot exceed 60 days.');
+      return;
+    }
+
+    setOperatorError('');
+    setSearchingSection('operator');
+    try {
+      const rows = await fetchRangeUsage({
+        ...range,
+        category: operatorFilters.category,
+        vehicleNumber: operatorFilters.vehicleNumber
+      });
+      setOperatorUsage(rows);
+    } catch (err) {
+      setOperatorError(err.response?.data?.error || 'Failed to load analytics for this date range');
+    } finally {
+      setSearchingSection('');
+    }
+  };
+
   const kpis = analytics?.kpis || {};
+  const currentVehicleMileage = useMemo(() => (
+    [...(analytics?.vehicleUsage || [])]
+      .sort((left, right) => left.vehicleNumber.localeCompare(right.vehicleNumber))
+  ), [analytics]);
+  const operatorCategories = [...new Set(
+    (analytics?.vehicleUsage || []).map(vehicle => vehicle.ownership).filter(Boolean)
+  )].sort();
+  const operatorVehicleNumbers = (analytics?.vehicleUsage || [])
+    .filter(vehicle => !operatorFilters.category || vehicle.ownership === operatorFilters.category)
+    .map(vehicle => vehicle.vehicleNumber)
+    .sort((left, right) => left.localeCompare(right));
   const reportSummary = useMemo(() => summarizeUsage(reportUsage), [reportUsage]);
   const contributionSummary = useMemo(() => summarizeUsage(contributionUsage), [contributionUsage]);
   const reportDistance = reportUsage.reduce((total, row) => total + row.distance, 0);
@@ -1007,7 +844,7 @@ const AnalyticsDashboard = () => {
           <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Admin</p>
           <h2 className="text-2xl font-bold text-slate-950 mt-0.5">Fleet Analytics</h2>
           <p className="text-sm text-slate-500 mt-1">
-            Executive mileage insights across vehicles, drivers, usage, and OCR quality.
+            Executive mileage insights across vehicles, drivers, and usage.
           </p>
         </div>
         <div className="flex flex-col sm:flex-row sm:items-center gap-3">
@@ -1224,13 +1061,115 @@ const AnalyticsDashboard = () => {
             <p className="text-sm text-slate-500 mt-1">First-to-last odometer difference for each continuous operator and vehicle session.</p>
             <p className="text-xs font-semibold text-slate-500 mt-2">{operatorUsage.length} recording gaps</p>
           </div>
-          <DateRangeFilter
-            filters={operatorFilters}
-            onChange={setOperatorFilters}
-            onSubmit={event => searchRange(event, 'operator', operatorFilters, setOperatorUsage, setOperatorError)}
-            error={operatorError}
-            searching={searchingSection === 'operator'}
-          />
+          <form onSubmit={searchOperatorUsage} className="w-full xl:max-w-4xl rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+              <SearchableDropdown
+                label="Category"
+                value={operatorFilters.category}
+                placeholder="All categories"
+                options={[
+                  { value: '', label: 'All categories' },
+                  ...operatorCategories.map(category => ({
+                    value: category,
+                    label: category.charAt(0).toUpperCase() + category.slice(1)
+                  }))
+                ]}
+                onChange={category => setOperatorFilters(previous => ({
+                    ...previous,
+                    category,
+                    vehicleNumber: ''
+                  }))}
+              />
+              <SearchableDropdown
+                label="Select Vehicle No"
+                value={operatorFilters.vehicleNumber}
+                placeholder="All vehicles"
+                options={[
+                  { value: '', label: 'All vehicles' },
+                  ...operatorVehicleNumbers.map(vehicleNumber => ({
+                    value: vehicleNumber,
+                    label: vehicleNumber
+                  }))
+                ]}
+                onChange={vehicleNumber => setOperatorFilters(previous => ({
+                  ...previous,
+                  vehicleNumber
+                }))}
+              />
+              {operatorFilters.period === 'monthly' ? (
+                <label className="text-xs font-semibold text-slate-600">
+                  Monthly
+                  <input
+                    type="month"
+                    value={operatorFilters.month}
+                    max={getCurrentMonth()}
+                    onChange={event => setOperatorFilters(previous => ({
+                      ...previous,
+                      month: event.target.value
+                    }))}
+                    className="input mt-1 h-10 w-full"
+                  />
+                </label>
+              ) : (
+                <div className="sm:col-span-2 xl:col-span-1 grid grid-cols-2 gap-2">
+                  <label className="text-xs font-semibold text-slate-600">
+                    From date
+                    <input
+                      type="date"
+                      value={operatorFilters.startDate}
+                      max={operatorFilters.endDate || getDateInputValue(new Date())}
+                      onChange={event => setOperatorFilters(previous => ({
+                        ...previous,
+                        startDate: event.target.value
+                      }))}
+                      className="input mt-1 h-10 w-full"
+                      required
+                    />
+                  </label>
+                  <label className="text-xs font-semibold text-slate-600">
+                    To date
+                    <input
+                      type="date"
+                      value={operatorFilters.endDate}
+                      min={operatorFilters.startDate || undefined}
+                      max={operatorFilters.startDate
+                        ? [getMaximumRangeEndDate(operatorFilters.startDate), getDateInputValue(new Date())].sort()[0]
+                        : getDateInputValue(new Date())}
+                      onChange={event => setOperatorFilters(previous => ({
+                        ...previous,
+                        endDate: event.target.value
+                      }))}
+                      className="input mt-1 h-10 w-full"
+                      required
+                    />
+                  </label>
+                </div>
+              )}
+              <div className="flex items-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setOperatorFilters(previous => ({
+                    ...previous,
+                    period: previous.period === 'monthly' ? 'custom' : 'monthly'
+                  }))}
+                  className="h-10 rounded-lg border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-100 whitespace-nowrap"
+                >
+                  {operatorFilters.period === 'monthly' ? 'Custom' : 'Monthly'}
+                </button>
+                <button
+                  type="submit"
+                  className="btn-primary h-10 px-4 text-sm whitespace-nowrap"
+                  disabled={searchingSection === 'operator'}
+                >
+                  {searchingSection === 'operator' ? 'Searching...' : 'Apply'}
+                </button>
+              </div>
+            </div>
+            {operatorFilters.period === 'custom' && (
+              <p className="mt-2 text-xs text-slate-500">Custom date range is limited to 60 days.</p>
+            )}
+            {operatorError && <p className="mt-2 text-xs font-medium text-red-600" role="alert">{operatorError}</p>}
+          </form>
         </div>
 
         {operatorUsage.length === 0 ? (

@@ -20,6 +20,10 @@ const validateDivision = ({ name }) => {
   return null;
 };
 
+const duplicateDivisionMessage = (error) => (
+  error.keyPattern?.code ? 'Division code already exists' : 'Division name already exists'
+);
+
 router.get('/', async (req, res) => {
   try {
     const search = req.query.search?.trim();
@@ -71,7 +75,7 @@ router.post('/', async (req, res) => {
     res.status(201).json(division);
   } catch (error) {
     if (error.code === 11000) {
-      return res.status(409).json({ error: 'Division name already exists' });
+      return res.status(409).json({ error: duplicateDivisionMessage(error) });
     }
 
     console.error('Division create error:', error);
@@ -101,7 +105,7 @@ router.put('/:id', async (req, res) => {
     res.json(division);
   } catch (error) {
     if (error.code === 11000) {
-      return res.status(409).json({ error: 'Division name already exists' });
+      return res.status(409).json({ error: duplicateDivisionMessage(error) });
     }
 
     console.error('Division update error:', error);

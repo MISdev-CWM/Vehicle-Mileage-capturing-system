@@ -18,7 +18,6 @@ router.get('/summary', async (req, res) => {
       totalUsers,
       activeUsers,
       correctedReadings,
-      confidenceAgg,
       recentReadings
     ] = await Promise.all([
       Reading.countDocuments(),
@@ -27,9 +26,6 @@ router.get('/summary', async (req, res) => {
       User.countDocuments(),
       User.countDocuments({ isActive: true }),
       Reading.countDocuments({ isCorrected: true }),
-      Reading.aggregate([
-        { $group: { _id: null, averageConfidence: { $avg: '$ocrConfidence' } } }
-      ]),
       Reading.find()
         .sort({ readingDate: -1 })
         .limit(10)
@@ -42,8 +38,7 @@ router.get('/summary', async (req, res) => {
         vehicles: totalVehicles,
         users: totalUsers,
         activeUsers,
-        correctedReadings,
-        averageConfidence: confidenceAgg[0]?.averageConfidence || 0
+        correctedReadings
       },
       vehicles: vehicleNumbers.sort(),
       recentReadings
@@ -91,9 +86,7 @@ const createVehicleAnalyticsRow = (vehicle) => ({
   monthUsageDates: new Set(),
   lastMileage: null,
   lastReadingDate: null,
-  correctionCount: 0,
-  confidenceTotal: 0,
-  averageConfidence: 0
+  correctionCount: 0
 });
 
 const getOperatorKey = (reading) => {
@@ -199,7 +192,6 @@ const createVehicleAssignmentSessions = (readings, userMap) => {
         if (!firstReading || entry.readingDate < firstReading.readingDate) {
           currentSession.firstReadings.set(day, {
             mileage: entry.reading.extractedMileage,
-            confidence: entry.reading.ocrConfidence,
             readingDate: entry.readingDate
           });
         }
@@ -238,7 +230,6 @@ const createSessionDailyUsage = (firstReadings) => {
       nextDate: nextDay,
       startMileage: start.mileage,
       endMileage: end.mileage,
-      confidence: start.confidence,
       distance: Math.round(distance)
     }];
   });
@@ -321,6 +312,11 @@ const monthInputPattern = /^\d{4}-(0[1-9]|1[0-2])$/;
 
 const parseRangeBoundary = (value, endOfDay = false) => {
   if (!value || !dateInputPattern.test(value)) {
+    return null;
+  }
+
+  const calendarDate = new Date(`${value}T00:00:00.000Z`);
+  if (Number.isNaN(calendarDate.getTime()) || calendarDate.toISOString().slice(0, 10) !== value) {
     return null;
   }
 
@@ -489,6 +485,20 @@ const getColomboDateKey = (value) => {
   return `${getPart('year')}-${getPart('month')}-${getPart('day')}`;
 };
 
+// All YYYY-MM-DD dates from start to end inclusive, to calculate number of days per month for pool vehicle in Analytics.
+const getDateKeysBetween = (startKey, endKey) => {
+  const keys = [];
+  const cursor = new Date(`${startKey}T00:00:00Z`);
+  const end = new Date(`${endKey}T00:00:00Z`);
+
+  while (cursor <= end) {
+    keys.push(cursor.toISOString().slice(0, 10));
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+
+  return keys;
+};
+
 const getLatestRecordingDaySummary = (readings) => {
   const lastReadingByVehicle = new Map();
   const distanceByDate = new Map();
@@ -537,7 +547,22 @@ router.get('/analytics', async (req, res) => {
       return res.status(400).json({ error: 'End date must be on or after start date' });
     }
 
+    if (hasRequestedRange) {
+      const [startYear, startMonth, startDay] = requestedStartDate.split('-').map(Number);
+      const [endYear, endMonth, endDay] = requestedEndDate.split('-').map(Number);
+      const dateCount = (
+        Date.UTC(endYear, endMonth - 1, endDay)
+        - Date.UTC(startYear, startMonth - 1, startDay)
+      ) / 86400000 + 1;
+
+      if (dateCount > 60) {
+        return res.status(400).json({ error: 'Date range cannot exceed 60 days' });
+      }
+    }
+
     const requestedMonth = req.query.month?.trim();
+    const requestedCategory = req.query.category?.trim().toLowerCase();
+    const requestedVehicleNumber = req.query.vehicleNumber?.trim().toUpperCase();
 
     if (requestedMonth && !monthInputPattern.test(requestedMonth)) {
       return res.status(400).json({ error: 'Month must be in YYYY-MM format' });
@@ -546,12 +571,15 @@ router.get('/analytics', async (req, res) => {
     const [readings, vehicles, users, companyDriverCount] = await Promise.all([
       Reading.find()
         .sort({ vehicleId: 1, readingDate: 1 })
-        .select('vehicleId extractedMileage ocrConfidence readingDate isCorrected originalMileage submittedBy driverName divisionName reason meterType'),
+        .select('vehicleId extractedMileage ocrConfidence readingDate isCorrected submittedBy driverName'),
       Vehicle.find().sort({ vehicleNumber: 1 }).select('-__v'),
       User.find().select('name employeeId username role isActive'),
       CompanyDriver.countDocuments()
     ]);
 
+    const vehicleCategoryByNumber = new Map(
+      vehicles.map(vehicle => [vehicle.vehicleNumber, vehicle.ownership || 'unknown'])
+    );
     const selectedMonth = requestedMonth || getColomboDateKey(new Date()).slice(0, 7);
     const [selectedYear, selectedMonthNumber] = selectedMonth.split('-').map(Number);
     const selectedMonthStart = parseRangeBoundary(`${selectedMonth}-01`);
@@ -566,11 +594,10 @@ router.get('/analytics', async (req, res) => {
 
     const operatorMap = new Map();
     const lastReadingByVehicle = new Map();
+    const openTripByVehicle = new Map();
     let totalDistance = 0;
     let monthDistance = 0;
     let correctionCount = 0;
-    let confidenceTotal = 0;
-    let confidenceCount = 0;
     let suspiciousReadings = 0;
 
     readings.forEach(reading => {
@@ -601,12 +628,6 @@ router.get('/analytics', async (req, res) => {
         vehicleStats.correctionCount += 1;
       }
 
-      if (typeof reading.ocrConfidence === 'number') {
-        confidenceTotal += reading.ocrConfidence;
-        confidenceCount += 1;
-        vehicleStats.confidenceTotal += reading.ocrConfidence;
-      }
-
       const operatorKey = getOperatorKey(reading);
       if (!operatorMap.has(operatorKey)) {
         operatorMap.set(operatorKey, createOperatorAnalyticsRow(reading, userMap));
@@ -617,6 +638,41 @@ router.get('/analytics', async (req, res) => {
       operatorStats.lastReadingDate = reading.readingDate;
       if (!operatorStats.vehicles.includes(vehicleNumber)) {
         operatorStats.vehicles.push(vehicleNumber);
+      }
+
+      const isInSelectedMonth = readingDate >= selectedMonthStart && readingDate < nextMonthStart;
+
+      // Pool vehicles: monthly mileage is the sum of (IN meter - OUT meter) for every trip, credited to the month in which the trip's IN reading was recorded.
+      const isPoolVehicle = vehicleStats.ownership === 'pool';
+      if (isPoolVehicle) {
+        if (reading.meterType === 'out') {
+          openTripByVehicle.set(vehicleNumber, reading);
+        } else if (reading.meterType === 'in' && openTripByVehicle.has(vehicleNumber)) {
+          const outReading = openTripByVehicle.get(vehicleNumber);
+          const tripDistance = reading.extractedMileage - outReading.extractedMileage;
+          openTripByVehicle.delete(vehicleNumber);
+
+          if (tripDistance >= 0 && isInSelectedMonth) {
+            monthDistance += tripDistance;
+            vehicleStats.monthDistance += tripDistance;
+          }
+
+          // Days used: every calendar date from OUT to IN (inclusive) that falls in the selected month.
+          // A same-day trip counts only if the vehicle actually moved.
+          // If many trips fall on the same day, that day is counted only once.
+          const outDateKey = getColomboDateKey(new Date(outReading.readingDate));
+          const inDateKey = getColomboDateKey(readingDate);
+
+          if (outDateKey === inDateKey) {
+            if (tripDistance !== 0 && inDateKey.startsWith(selectedMonth)) {
+              vehicleStats.monthUsageDates.add(inDateKey);
+            }
+          } else {
+            getDateKeysBetween(outDateKey, inDateKey)
+              .filter(dateKey => dateKey.startsWith(selectedMonth))
+              .forEach(dateKey => vehicleStats.monthUsageDates.add(dateKey));
+          }
+        }
       }
 
       const previousReading = lastReadingByVehicle.get(vehicleNumber);
@@ -630,11 +686,13 @@ router.get('/analytics', async (req, res) => {
           vehicleStats.totalDistance += distance;
           operatorStats.totalDistance += distance;
 
-          if (readingDate >= selectedMonthStart && readingDate < nextMonthStart) {
-            monthDistance += distance;
-            vehicleStats.monthDistance += distance;
+          if (isInSelectedMonth) {
+            if (!isPoolVehicle) {
+              monthDistance += distance;
+              vehicleStats.monthDistance += distance;
+            }
 
-            if (distance > 0) {
+            if (distance > 0 && !isPoolVehicle) {
               vehicleStats.monthUsageDates.add(getColomboDateKey(readingDate));
             }
           }
@@ -649,8 +707,7 @@ router.get('/analytics', async (req, res) => {
         ...vehicle,
         totalDistance: Math.round(vehicle.totalDistance),
         monthDistance: Math.round(vehicle.monthDistance),
-        monthDaysUsed: monthUsageDates.size,
-        averageConfidence: vehicle.readingCount ? vehicle.confidenceTotal / vehicle.readingCount : 0
+        monthDaysUsed: monthUsageDates.size
       }))
       .sort((a, b) => b.totalDistance - a.totalDistance || a.vehicleNumber.localeCompare(b.vehicleNumber));
 
@@ -664,7 +721,13 @@ router.get('/analytics', async (req, res) => {
     const rangeReadings = hasRequestedRange
       ? readings.filter(reading => {
         const readingDate = new Date(reading.readingDate);
-        return readingDate >= rangeStart && readingDate <= rangeEnd;
+        const vehicleNumber = reading.vehicleId?.toUpperCase();
+        const category = vehicleCategoryByNumber.get(vehicleNumber) || 'unknown';
+
+        return readingDate >= rangeStart
+          && readingDate <= rangeEnd
+          && (!requestedVehicleNumber || vehicleNumber === requestedVehicleNumber)
+          && (!requestedCategory || category.toLowerCase() === requestedCategory);
       })
       : [];
     const rangeUsage = createRangeUsage(rangeReadings, userMap);
@@ -708,7 +771,6 @@ router.get('/analytics', async (req, res) => {
         rangeDistance: Math.round(rangeDistance),
         latestDailyKilometers: latestRecordingDay.distance,
         latestUsageDate: latestRecordingDay.date,
-        averageConfidence: confidenceCount ? confidenceTotal / confidenceCount : 0,
         correctionRate: readings.length ? correctionCount / readings.length : 0,
         unassignedVehicles,
         suspiciousReadings

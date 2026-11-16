@@ -273,7 +273,7 @@ const VehicleUsage = ({ onBack }) => {
                         <td className="py-3 text-sm font-mono font-semibold text-slate-900">{reading.vehicleId}</td>
                         <td className="py-3 text-sm text-slate-700">{reading.driverName || reading.submittedByName || 'Unknown user'}</td>
                         <td className="py-3 text-sm text-right font-semibold text-slate-900">{formatMileage(reading.extractedMileage)}</td>
-                        <td className="py-3 text-sm text-slate-600">{reading.isCorrected ? 'Corrected' : 'OCR verified'}</td>
+                        <td className="py-3 text-sm text-slate-600">{reading.isCorrected ? 'Corrected' : 'Manual'}</td>
                       </tr>
                     ))}
                   </tbody>

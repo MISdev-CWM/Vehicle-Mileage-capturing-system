@@ -1,7 +1,48 @@
 import { useState, useEffect } from 'react';
 import api from '../api';
 
-const ReadingHistory = ({ vehicleId }) => {
+// Pair each OUT reading with the IN reading that follows it into a single trip.
+// Readings arrive newest first; trips are returned newest first.
+const buildTrips = (readings) => {
+  const trips = [];
+  let openTrip = null;
+
+  [...readings]
+    .sort((a, b) => new Date(a.readingDate) - new Date(b.readingDate))
+    .forEach((reading) => {
+      if (reading.meterType === 'out') {
+        openTrip = { id: reading._id, driverName: reading.driverName, out: reading, in: null };
+        trips.push(openTrip);
+      } else if (reading.meterType === 'in' && openTrip) {
+        openTrip.in = reading;
+        openTrip = null;
+      }
+    });
+
+  return trips.reverse();
+};
+
+const DateTimeCell = ({ value }) => (
+  <>
+    <p className="text-sm font-medium text-slate-900 whitespace-nowrap">
+      {new Date(value).toLocaleDateString()}
+    </p>
+    <p className="text-xs text-slate-500 whitespace-nowrap">
+      {new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+    </p>
+  </>
+);
+
+const MeterCell = ({ value }) => (
+  <span className="whitespace-nowrap">
+    <span className="text-sm font-mono font-semibold text-slate-900">{value.toLocaleString()}</span>
+    <span className="text-xs text-slate-400 ml-1">km</span>
+  </span>
+);
+
+const Empty = () => <span className="text-sm text-slate-400">—</span>;
+
+const ReadingHistory = ({ vehicleId, showTrips = false, refreshKey = 0 }) => {
   const [readings, setReadings] = useState([]);
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -52,7 +93,7 @@ const ReadingHistory = ({ vehicleId }) => {
     return () => {
       isActive = false;
     };
-  }, [vehicleId]);
+  }, [vehicleId, refreshKey]);
 
   if (loading) {
     return (
@@ -106,6 +147,47 @@ const ReadingHistory = ({ vehicleId }) => {
             <p className="text-slate-500 font-medium">No readings yet</p>
             <p className="text-slate-400 text-sm mt-1">Capture your first odometer photo</p>
           </div>
+        ) : showTrips ? (
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-slate-200">
+                  {['Driver Name', 'Out Time', 'Out Meter', 'In Time', 'In Meter', 'Completed', 'Distance'].map((label) => (
+                    <th key={label} className={`${label === 'Driver Name' ? 'text-left' : 'text-center'} text-xs font-semibold text-slate-500 uppercase tracking-wider pb-3 px-2 first:pl-0 last:pr-0 whitespace-nowrap`}>
+                      {label}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {buildTrips(readings).map((trip) => {
+                  const isCompleted = Boolean(trip.in);
+
+                  return (
+                    <tr key={trip.id} className="hover:bg-slate-50 transition-colors">
+                      <td className="py-3 pr-2 text-left text-sm font-medium text-slate-900">{trip.driverName || <Empty />}</td>
+                      <td className="py-3 px-2 text-center"><DateTimeCell value={trip.out.readingDate} /></td>
+                      <td className="py-3 px-2 text-center"><MeterCell value={trip.out.extractedMileage} /></td>
+                      <td className="py-3 px-2 text-center">{isCompleted ? <DateTimeCell value={trip.in.readingDate} /> : <Empty />}</td>
+                      <td className="py-3 px-2 text-center">{isCompleted ? <MeterCell value={trip.in.extractedMileage} /> : <Empty />}</td>
+                      <td className="py-3 px-2 text-center">
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                          isCompleted ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                        }`}>
+                          {isCompleted ? 'Yes' : 'No'}
+                        </span>
+                      </td>
+                      <td className="py-3 pl-2 text-center">
+                        {isCompleted
+                          ? <MeterCell value={trip.in.extractedMileage - trip.out.extractedMileage} />
+                          : <Empty />}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full">
@@ -113,7 +195,6 @@ const ReadingHistory = ({ vehicleId }) => {
                 <tr className="border-b border-slate-200">
                   <th className="text-left text-xs font-semibold text-slate-500 uppercase tracking-wider pb-3">Date</th>
                   <th className="text-right text-xs font-semibold text-slate-500 uppercase tracking-wider pb-3">Mileage</th>
-                  <th className="text-center text-xs font-semibold text-slate-500 uppercase tracking-wider pb-3">OCR</th>
                   <th className="text-center text-xs font-semibold text-slate-500 uppercase tracking-wider pb-3">Status</th>
                 </tr>
               </thead>
@@ -135,30 +216,28 @@ const ReadingHistory = ({ vehicleId }) => {
                       <span className="text-xs text-slate-400 ml-1">km</span>
                     </td>
                     <td className="py-3 text-center">
-                      <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                        r.ocrConfidence > 0.8 ? 'bg-emerald-100 text-emerald-800' :
-                        r.ocrConfidence > 0.5 ? 'bg-amber-100 text-amber-800' :
-                        'bg-red-100 text-red-800'
-                      }`}>
-                        {(r.ocrConfidence * 100).toFixed(0)}%
-                      </span>
-                    </td>
-                    <td className="py-3 text-center">
+                      <div className="flex flex-col items-center gap-1">
+                        {r.meterType && (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-brand-50 text-brand-700">
+                            {r.isRental ? 'Rental ' : ''}{r.meterType.toUpperCase()}
+                          </span>
+                        )}
                       {r.isCorrected ? (
                         <span className="inline-flex items-center gap-1 text-amber-600 text-xs font-medium">
                           <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                           </svg>
-                          Edited
+                          Corrected
                         </span>
                       ) : (
                         <span className="inline-flex items-center gap-1 text-emerald-600 text-xs font-medium">
                           <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                           </svg>
-                          Auto
+                          Manual
                         </span>
                       )}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -167,6 +246,7 @@ const ReadingHistory = ({ vehicleId }) => {
           </div>
         )}
       </div>
+
     </div>
   );
 };

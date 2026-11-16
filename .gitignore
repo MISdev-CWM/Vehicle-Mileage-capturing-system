@@ -12,6 +12,11 @@ dist
 dist-ssr
 *.local
 
+# Local environment files; keep safe example templates versioned
+.env
+.env.*
+!.env.example
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
@@ -24,6 +29,3 @@ dist-ssr
 *.sw?
 
 package-lock.json
-
-/ocr-service/__pycache__/
-/ocr-service/.venv/

@@ -34,9 +34,27 @@ const CorrectedBadge = ({ value }) =>
     </span>
   ) : (
     <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-500">
-      Auto
+      Manual
     </span>
   );
+
+const ReadingTime = ({ value }) => (
+  <>
+    <span className="block text-sm font-semibold text-slate-900">
+      {new Date(value).toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' })}
+    </span>
+    <span className="block text-xs text-slate-400 mt-0.5">
+      {new Date(value).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
+    </span>
+  </>
+);
+
+const Kilometers = ({ value, className = 'text-slate-900' }) => (
+  <>
+    <span className={`font-mono text-sm font-bold ${className}`}>{value?.toLocaleString()}</span>
+    <span className="text-xs text-slate-400 ml-1">km</span>
+  </>
+);
 
 // ─── CSV Export ───────────────────────────────────────────────────────────────
 function exportToCSV(readings) {
@@ -53,7 +71,7 @@ function exportToCSV(readings) {
   const rows = readings.map(r => [
     new Date(r.readingDate).toLocaleString(),
     r.vehicleId,
-    r.meterType ? r.meterType.toUpperCase() : '',
+    r.meterType ? `${r.isRental ? 'RENTAL ' : ''}${r.meterType.toUpperCase()}` : '',
     r.driverName ? `${r.driverName} (Driver)` : r.submittedByName || r.submittedBy,
     r.extractedMileage,
     r.isCorrected ? 'Yes' : 'No',
@@ -93,6 +111,13 @@ const ReadingsAdmin = () => {
   const [editMileage, setEditMileage] = useState('');
   const [deletingReading, setDeletingReading] = useState(null);
   const [actionLoading, setActionLoading] = useState(false);
+  const [photoReading, setPhotoReading] = useState(null);
+  const [photoUrl, setPhotoUrl] = useState('');
+  const [photoLoadingId, setPhotoLoadingId] = useState('');
+  const [photoError, setPhotoError] = useState('');
+  const [irregularReadings, setIrregularReadings] = useState([]);
+  const [irregularLoading, setIrregularLoading] = useState(true);
+  const [irregularError, setIrregularError] = useState('');
 
   // Filters
   const [vehicles, setVehicles] = useState([]);
@@ -104,6 +129,28 @@ const ReadingsAdmin = () => {
   const [customEndDate, setCustomEndDate] = useState('');
 
   const debounceRef = useRef(null);
+
+  useEffect(() => {
+    return () => {
+      if (photoUrl) {
+        URL.revokeObjectURL(photoUrl);
+      }
+    };
+  }, [photoUrl]);
+
+  const openPhoto = async (reading) => {
+    setPhotoLoadingId(reading._id);
+    setPhotoError('');
+    try {
+      const response = await api.get(`/readings/${reading._id}/image`, { responseType: 'blob' });
+      setPhotoReading(reading);
+      setPhotoUrl(URL.createObjectURL(response.data));
+    } catch (err) {
+      setPhotoError(err.response?.data?.error || 'Failed to load meter photo from Google Drive.');
+    } finally {
+      setPhotoLoadingId('');
+    }
+  };
 
   const buildParams = useCallback(
     (overridePage) => {
@@ -141,6 +188,24 @@ const ReadingsAdmin = () => {
       setLoading(false);
     }
   }, [buildParams]);
+
+  const fetchIrregularReadings = useCallback(async () => {
+    try {
+      const res = await api.get('/readings/irregular-pool');
+      setIrregularReadings(res.data);
+      setIrregularError('');
+    } catch (err) {
+      setIrregularError(err.response?.data?.error || 'Failed to load irregular pool meter readings.');
+    } finally {
+      setIrregularLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const loadTimer = window.setTimeout(fetchIrregularReadings, 0);
+
+    return () => window.clearTimeout(loadTimer);
+  }, [fetchIrregularReadings]);
 
   // Debounced re-fetch when filters change
   useEffect(() => {
@@ -192,7 +257,7 @@ const ReadingsAdmin = () => {
     try {
       await api.put(`/readings/${editingReading._id}`, { mileage: Number(editMileage) });
       closeEditModal();
-      await fetchReadings(page);
+      await Promise.all([fetchReadings(page), fetchIrregularReadings()]);
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to update reading');
     } finally {
@@ -207,7 +272,7 @@ const ReadingsAdmin = () => {
     try {
       await api.delete(`/readings/${deletingReading._id}`);
       setDeletingReading(null);
-      await fetchReadings(page);
+      await Promise.all([fetchReadings(page), fetchIrregularReadings()]);
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to delete reading');
     } finally {
@@ -270,26 +335,20 @@ const ReadingsAdmin = () => {
       {/* ── Header ── */}
       <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
         <div>
-          <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Admin</p>
-          <h2 className="text-2xl font-bold text-slate-900 mt-0.5">Readings</h2>
+          <h2 className="text-2xl font-bold text-slate-900">Readings</h2>
           <p className="text-sm text-slate-500 mt-1">
             Browse and filter all odometer readings across the fleet.
           </p>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
           <button
-            onClick={() => fetchReadings(page)}
+            onClick={() => {
+              fetchReadings(page);
+              fetchIrregularReadings();
+            }}
             className="btn-secondary"
             title="Refresh"
           >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M4 4v5h.582M20 20v-5h-.581M5.635 15A8 8 0 1118.364 8.636"
-              />
-            </svg>
             <span className="ml-1.5">Refresh</span>
           </button>
           <button
@@ -629,6 +688,9 @@ const ReadingsAdmin = () => {
                     Mileage
                   </th>
                   <th className="text-center text-xs font-semibold text-slate-500 uppercase tracking-wider px-4 py-3">
+                    Photo
+                  </th>
+                  <th className="text-center text-xs font-semibold text-slate-500 uppercase tracking-wider px-4 py-3">
                     Status
                   </th>
                   <th className="text-right text-xs font-semibold text-slate-500 uppercase tracking-wider px-4 py-3">
@@ -670,7 +732,9 @@ const ReadingsAdmin = () => {
 
                     {/* Meter */}
                     <td className="px-4 py-3.5 text-sm font-semibold text-slate-700 whitespace-nowrap">
-                      {reading.meterType ? reading.meterType.toUpperCase() : <span className="font-normal text-slate-400">—</span>}
+                      {reading.meterType
+                        ? `${reading.isRental ? 'RENTAL ' : ''}${reading.meterType.toUpperCase()}`
+                        : <span className="font-normal text-slate-400">—</span>}
                     </td>
 
                     {/* User */}
@@ -688,6 +752,20 @@ const ReadingsAdmin = () => {
                         <span className="block text-xs text-slate-400 line-through mt-0.5">
                           {reading.originalMileage?.toLocaleString()} km
                         </span>
+                      )}
+                    </td>
+
+                    {/* Photo */}
+                    <td className="px-4 py-3.5 text-center">
+                      {reading.hasMeterImage && (
+                        <button
+                          type="button"
+                          onClick={() => openPhoto(reading)}
+                          disabled={photoLoadingId === reading._id}
+                          className="text-sm font-medium text-brand-600 hover:text-brand-700 disabled:opacity-50"
+                        >
+                          {photoLoadingId === reading._id ? 'Loading...' : 'View photo'}
+                        </button>
                       )}
                     </td>
 
@@ -741,6 +819,7 @@ const ReadingsAdmin = () => {
                   </button>
                 )
               )}
+
             </div>
 
             <button
@@ -750,6 +829,115 @@ const ReadingsAdmin = () => {
             >
               Next →
             </button>
+          </div>
+        )}
+
+        {photoError && (
+          <div className="mx-6 mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">
+            {photoError}
+          </div>
+        )}
+      </div>
+
+      {photoUrl && photoReading && (
+        <div
+          className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-950/80 px-4 py-6 backdrop-blur-md"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Meter photo"
+          onClick={() => {
+            setPhotoUrl('');
+            setPhotoReading(null);
+          }}
+        >
+          <div className="relative max-w-4xl w-full" onClick={event => event.stopPropagation()}>
+            <div className="mb-3 flex items-center justify-between text-white">
+              <p className="text-sm font-medium">
+                {photoReading.vehicleId} · {photoReading.extractedMileage?.toLocaleString()} km
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setPhotoUrl('');
+                  setPhotoReading(null);
+                }}
+                className="rounded px-3 py-1 text-sm font-medium hover:bg-white/10"
+              >
+                Close
+              </button>
+            </div>
+            <img
+              src={photoUrl}
+              alt={`${photoReading.vehicleId} odometer reading`}
+              className="max-h-[80vh] w-full rounded-lg bg-black object-contain"
+            />
+          </div>
+        </div>
+      )}
+
+      {/* ── Irregular Pool Meter Readings ── */}
+      <div className="card overflow-hidden p-0">
+        <div className="px-6 py-4 border-b border-slate-100">
+          <h3 className="text-lg font-semibold text-slate-900">Irregular Pool Meter Readings</h3>
+          <p className="text-sm text-slate-500 mt-1">
+            OUT readings more than 1 km above the pool vehicle's previous IN reading.
+          </p>
+        </div>
+
+        {irregularLoading ? (
+          <p className="px-6 py-8 text-sm text-slate-500">Loading…</p>
+        ) : irregularError ? (
+          <div className="px-6 py-8">
+            <p className="text-sm text-red-600 font-medium mb-3" role="alert">{irregularError}</p>
+            <button onClick={fetchIrregularReadings} className="btn-secondary text-sm">
+              Retry
+            </button>
+          </div>
+        ) : irregularReadings.length === 0 ? (
+          <p className="px-6 py-8 text-sm text-slate-500">No irregular pool meter readings.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="bg-slate-50/80 border-b border-slate-200">
+                  {[
+                    ['Vehicle', 'text-left'],
+                    ['In Meter', 'text-right'],
+                    ['In Time', 'text-left'],
+                    ['In Driver', 'text-left'],
+                    ['Out Meter', 'text-right'],
+                    ['Out Time', 'text-left'],
+                    ['Out Driver', 'text-left'],
+                    ['Gap', 'text-right'],
+                  ].map(([heading, align]) => (
+                    <th
+                      key={heading}
+                      className={`${align} text-xs font-semibold text-slate-500 uppercase tracking-wider px-4 py-3 whitespace-nowrap first:pl-6 last:pr-6`}
+                    >
+                      {heading}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {irregularReadings.map(row => (
+                  <tr key={row._id} className="hover:bg-indigo-50/20 transition-colors duration-100">
+                    <td className="pl-6 pr-4 py-3.5 whitespace-nowrap">
+                      <span className="font-mono text-sm font-bold text-slate-900 bg-slate-100 px-2 py-0.5 rounded">
+                        {row.vehicleId}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3.5 text-right whitespace-nowrap"><Kilometers value={row.inMeter} /></td>
+                    <td className="px-4 py-3.5 whitespace-nowrap"><ReadingTime value={row.inTime} /></td>
+                    <td className="px-4 py-3.5 text-sm text-slate-700 whitespace-nowrap">{row.inDriver || '—'}</td>
+                    <td className="px-4 py-3.5 text-right whitespace-nowrap"><Kilometers value={row.outMeter} /></td>
+                    <td className="px-4 py-3.5 whitespace-nowrap"><ReadingTime value={row.outTime} /></td>
+                    <td className="px-4 py-3.5 text-sm text-slate-700 whitespace-nowrap">{row.outDriver || '—'}</td>
+                    <td className="pl-4 pr-6 py-3.5 text-right whitespace-nowrap"><Kilometers value={row.gap} className="text-red-600" /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </div>

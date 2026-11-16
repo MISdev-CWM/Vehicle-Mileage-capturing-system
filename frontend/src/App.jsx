@@ -8,10 +8,10 @@ import EmployeeManagement from './components/EmployeeManagement';
 import FuelUsageDashboard from './components/FuelUsageDashboard';
 import LoginPage from './components/LoginPage';
 import MeterCapture from './components/MeterCapture';
-import PoolVehicleMeter from './components/PoolVehicleMeter';
 import ReadingHistory from './components/ReadingHistory';
 import ReadingsAdmin from './components/ReadingsAdmin';
 import VehicleManagement from './components/VehicleManagement';
+import PoolVehicleUsage from './components/PoolVehicleUsage';
 
 const adminNavItems = [
   {
@@ -73,6 +73,14 @@ const adminNavItems = [
       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
       </svg>
+    )
+  },
+  {
+    id: 'poolVehicles',
+    label: 'Pool Vehicles',
+    path: '/admin/pool-vehicles',
+    icon: (
+      <svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><title>car</title><g fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"><path d="M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 16 10s-1.3-1.4-2.2-2.3c-.5-.4-1.1-.7-1.8-.7H5c-.6 0-1.1.4-1.4.9l-1.4 2.9A3.7 3.7 0 0 0 2 12v4c0 .6.4 1 1 1h2"/><circle cx="7" cy="17" r="2"/><path d="M9 17h6"/><circle cx="17" cy="17" r="2"/></g></svg>
     )
   },
   {
@@ -190,7 +198,7 @@ function App() {
   const [poolVehicleReason, setPoolVehicleReason] = useState('');
   const [driverSelectionConfirmed, setDriverSelectionConfirmed] = useState(false);
   const [driverOptionsError, setDriverOptionsError] = useState(null);
-  const [poolMeterRefreshKey, setPoolMeterRefreshKey] = useState(0);
+  const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
   const hasAutoFilledHire = useRef(false);
 
   useEffect(() => {
@@ -370,7 +378,7 @@ function App() {
             </div>
             <div>
               <h1 className="text-lg font-bold text-slate-900 leading-tight">Fleet Mileage</h1>
-              <p className="text-xs text-slate-500">{isAdmin ? 'Admin control panel' : 'OCR-powered odometer tracking'}</p>
+              <p className="text-xs text-slate-500">{isAdmin ? 'Admin control panel' : 'Camera-based odometer tracking'}</p>
             </div>
           </div>
 
@@ -444,6 +452,8 @@ function App() {
                   <AnalyticsDashboard />
                 ) : adminPage === 'readings' ? (
                   <ReadingsAdmin />
+                 ) : adminPage === 'poolVehicles' ? (
+                  <PoolVehicleUsage />
                 ) : adminPage === 'fuelUsage' ? (
                   <FuelUsageDashboard />
                 ) : (
@@ -453,7 +463,7 @@ function App() {
             </section>
           </div>
         ) : isDriver ? (
-          // ── Driver login workspace ─────────────────────────────────────
+          // ── Driver login workspace 
           <div className="space-y-6">
             {/* Step 1: Vehicle + Driver Name selection */}
             {!driverSelectionConfirmed ? (
@@ -611,7 +621,7 @@ function App() {
                         disabled={!isDriverSelectionComplete}
                         className="btn-primary w-full disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        ✓ Confirm &amp; Proceed to Scan
+                        ✓ Confirm &amp; Proceed
                       </button>
                     </>
                   )}
@@ -653,21 +663,18 @@ function App() {
                       divisionId={selectedDivision}
                       divisionName={selectedDivisionName}
                       reason={poolVehicleReason.trim()}
-                      onSaved={() => setPoolMeterRefreshKey(key => key + 1)}
+                      onSaved={() => setHistoryRefreshKey(key => key + 1)}
                     />
                   </div>
 
                   <div>
                     <h2 className="text-lg font-semibold text-slate-900 mb-4">History &amp; Stats</h2>
-                    {isPoolVehicleSelected && (
-                      <PoolVehicleMeter
-                        key={`pool-meter-${selectedDriverVehicle}-${driverDisplayName}`}
-                        vehicleId={selectedDriverVehicle}
-                        driverName={driverDisplayName}
-                        refreshKey={poolMeterRefreshKey}
-                      />
-                    )}
-                    <ReadingHistory key={`history-driver-${selectedDriverVehicle}`} vehicleId={selectedDriverVehicle} />
+                    <ReadingHistory
+                      key={`history-driver-${selectedDriverVehicle}`}
+                      vehicleId={selectedDriverVehicle}
+                      showTrips
+                      refreshKey={historyRefreshKey}
+                    />
                   </div>
                 </div>
               </div>
@@ -720,7 +727,11 @@ function App() {
                   <div className="w-2 h-2 bg-brand-500 rounded-full animate-pulse" />
                   <h2 className="text-lg font-semibold text-slate-900">New Reading</h2>
                 </div>
-                <MeterCapture key={`capture-${assignedVehicle}`} vehicleId={assignedVehicle} />
+                <MeterCapture
+                  key={`capture-${assignedVehicle}`}
+                  vehicleId={assignedVehicle}
+                  allowRental={user.role === 'user'}
+                />
               </div>
 
               <div>
@@ -741,7 +752,7 @@ function App() {
 
       <footer className="border-t border-slate-200">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6 text-center text-sm text-slate-400">
-          Images are processed in-memory and never stored. Powered by EasyOCR.
+          Meter photos are captured with your camera and saved with each reading.
         </div>
       </footer>
     </div>

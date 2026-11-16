@@ -96,23 +96,18 @@ const AdminDashboard = () => {
       <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
         <div>
           <h2 className="text-2xl font-bold text-slate-900">Admin Dashboard</h2>
-          <p className="text-sm text-slate-500 mt-1">Monitor users, vehicles, readings, and OCR quality.</p>
+          <p className="text-sm text-slate-500 mt-1">Monitor users, vehicles, and readings.</p>
         </div>
         <button onClick={fetchAdminData} className="btn-secondary self-start sm:self-auto">
           Refresh
         </button>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard label="Readings" value={totals.readings || 0} accent="text-brand-700" />
         <StatCard label="Vehicles" value={totals.vehicles || 0} accent="text-emerald-600" />
         <StatCard label="Users" value={totals.users || 0} />
         <StatCard label="Corrections" value={totals.correctedReadings || 0} accent="text-amber-600" />
-        <StatCard
-          label="Avg OCR"
-          value={`${((totals.averageConfidence || 0) * 100).toFixed(0)}%`}
-          accent="text-indigo-700"
-        />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -132,7 +127,6 @@ const AdminDashboard = () => {
                     <tr className="border-b border-slate-200">
                       <th className="text-left text-xs font-semibold text-slate-500 uppercase tracking-wider pb-3">Vehicle</th>
                       <th className="text-right text-xs font-semibold text-slate-500 uppercase tracking-wider pb-3">Mileage</th>
-                      <th className="text-center text-xs font-semibold text-slate-500 uppercase tracking-wider pb-3">OCR</th>
                       <th className="text-left text-xs font-semibold text-slate-500 uppercase tracking-wider pb-3">Date</th>
                     </tr>
                   </thead>
@@ -142,11 +136,6 @@ const AdminDashboard = () => {
                         <td className="py-3 font-mono text-sm font-semibold text-slate-900">{reading.vehicleId}</td>
                         <td className="py-3 text-right font-mono text-sm text-slate-900">
                           {reading.extractedMileage?.toLocaleString()} km
-                        </td>
-                        <td className="py-3 text-center">
-                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-slate-100 text-slate-700">
-                            {((reading.ocrConfidence || 0) * 100).toFixed(0)}%
-                          </span>
                         </td>
                         <td className="py-3 text-sm text-slate-600">
                           {new Date(reading.readingDate).toLocaleString()}

@@ -4,6 +4,7 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const User = require('./models/User');
 const FuelUsageBatch = require('./models/FuelUsageBatch');
+const { startMonthlyMileageReminder } = require('./utils/monthlyMileageReminder');
 
 const app = express();
 
@@ -42,6 +43,8 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/vehicle-m
     }
 
     console.log('MongoDB connected');
+    // Check if it is the second of the month.
+    startMonthlyMileageReminder();
   })
   .catch(err => console.error('MongoDB error:', err));
 
@@ -56,10 +59,18 @@ app.use('/api/readings', require('./routes/readings'));
 app.use('/api/fuel-usage', require('./routes/fuelUsage'));
 
 app.get('/api/health', (req, res) => {
+  const missingDriveConfiguration = [
+    !process.env.GOOGLE_CLIENT_ID && 'GOOGLE_CLIENT_ID',
+    !process.env.GOOGLE_CLIENT_SECRET && 'GOOGLE_CLIENT_SECRET',
+    !process.env.GOOGLE_DRIVE_REFRESH_TOKEN && 'GOOGLE_DRIVE_REFRESH_TOKEN',
+    !process.env.DRIVE_FOLDER_ID && 'DRIVE_FOLDER_ID'
+  ].filter(Boolean);
+
   res.json({ 
-    status: 'OK', 
-    ocrService: process.env.OCR_SERVICE_URL || 'http://localhost:8000',
-    imageStorage: 'disabled (memory-only)'
+    status: 'OK',
+    imageStorage: 'Google Drive',
+    googleDriveConfigured: missingDriveConfiguration.length === 0,
+    missingDriveConfiguration
   });
 });
 
