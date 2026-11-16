@@ -569,7 +569,7 @@ router.get('/analytics', async (req, res) => {
     }
 
     const [readings, vehicles, users, companyDriverCount] = await Promise.all([
-      Reading.find()
+      Reading.find({ isRental: { $ne: true } })
         .sort({ vehicleId: 1, readingDate: 1 })
         .select('vehicleId extractedMileage ocrConfidence readingDate isCorrected submittedBy driverName'),
       Vehicle.find().sort({ vehicleNumber: 1 }).select('-__v'),

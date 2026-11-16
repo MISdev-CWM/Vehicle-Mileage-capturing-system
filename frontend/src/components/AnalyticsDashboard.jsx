@@ -308,6 +308,363 @@ const DateRangeFilter = ({ filters, onChange, onSubmit, error, searching }) => (
   </div>
 );
 
+const ownershipChartStyles = {
+  pool: {
+    label: 'Pool',
+    badge: 'border-blue-100 bg-blue-50 text-blue-700',
+    accent: 'bg-blue-600',
+    surface: 'from-blue-50/80'
+  },
+  company: {
+    label: 'Company',
+    badge: 'border-teal-100 bg-teal-50 text-teal-700',
+    accent: 'bg-teal-600',
+    surface: 'from-teal-50/80'
+  },
+  personal: {
+    label: 'Personal',
+    badge: 'border-violet-100 bg-violet-50 text-violet-700',
+    accent: 'bg-violet-600',
+    surface: 'from-violet-50/80'
+  }
+};
+
+const professionalUserColors = [
+  '#1d4ed8', '#0f766e', '#4338ca', '#0369a1', '#047857', '#6d28d9',
+  '#9f1239', '#a16207', '#334155', '#0e7490', '#5b21b6', '#be123c',
+  '#166534', '#c2410c', '#1e40af', '#115e59', '#3730a3', '#075985',
+  '#15803d', '#7e22ce', '#9f1239', '#92400e', '#475569', '#155e75'
+];
+
+const getStableUserColor = (userKey = '') => {
+  const hash = Array.from(String(userKey)).reduce(
+    (value, character) => ((value * 31) + character.charCodeAt(0)) >>> 0,
+    0
+  );
+
+  return professionalUserColors[hash % professionalUserColors.length];
+};
+
+const getFirstName = (name = '') => String(name).trim().split(/\s+/)[0] || 'Unknown';
+
+const flattenOwnershipMileage = (rows) => rows
+  .flatMap(row => (row.vehicleMileage || []).map(vehicle => ({
+    operatorKey: row.operatorKey,
+    name: row.name,
+    employeeId: row.employeeId,
+    username: row.username,
+    role: row.role,
+    vehicleNumber: vehicle.vehicleNumber,
+    distance: vehicle.distance,
+    readingCount: vehicle.readingCount
+  })))
+  .sort((left, right) => right.distance - left.distance
+    || left.name.localeCompare(right.name)
+    || left.vehicleNumber.localeCompare(right.vehicleNumber));
+
+const OwnershipMileageChart = ({ ownership, rows, onExpand, expanded = false }) => {
+  const style = ownershipChartStyles[ownership];
+  const [searchTerm, setSearchTerm] = useState('');
+  const [recordLimit, setRecordLimit] = useState(expanded ? '20' : '10');
+  const records = useMemo(() => flattenOwnershipMileage(rows), [rows]);
+  const totalDistance = records.reduce((total, record) => total + record.distance, 0);
+  const normalizedSearch = searchTerm.trim().toLowerCase();
+  const filteredRecords = records.filter(record => (
+    !normalizedSearch
+    || record.name?.toLowerCase().includes(normalizedSearch)
+    || record.employeeId?.toLowerCase().includes(normalizedSearch)
+    || record.username?.toLowerCase().includes(normalizedSearch)
+    || record.vehicleNumber?.toLowerCase().includes(normalizedSearch)
+  ));
+  const visibleRecords = recordLimit === 'all'
+    ? filteredRecords
+    : filteredRecords.slice(0, Number(recordLimit));
+  const maximumDistance = Math.max(...filteredRecords.map(record => record.distance), 1);
+
+  return (
+    <article className={`min-w-0 bg-gradient-to-b ${style.surface} to-white ${expanded ? 'px-7 py-6' : 'px-5 py-5'}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={`h-2.5 w-2.5 rounded-full ${style.accent}`} aria-hidden="true" />
+            <h4 className="text-base font-semibold text-slate-950">{style.label} vehicles</h4>
+            <span className={`rounded-md border px-2 py-0.5 text-[11px] font-semibold ${style.badge}`}>{records.length} records</span>
+          </div>
+          <p className="mt-1 text-xs text-slate-500">{formatKm(totalDistance)} total monthly mileage</p>
+        </div>
+        {!expanded && (
+          <button
+            type="button"
+            onClick={onExpand}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 shadow-sm transition-colors hover:border-brand-300 hover:bg-brand-50 hover:text-brand-700"
+            aria-label={`Open ${style.label} chart in full screen`}
+            title="Open full screen"
+          >
+            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 3H3v5m13-5h5v5M8 21H3v-5m18 0v5h-5" />
+            </svg>
+          </button>
+        )}
+      </div>
+
+      {records.length === 0 ? (
+        <div className={`flex items-center justify-center text-center ${expanded ? 'h-[calc(100vh-13rem)] min-h-[420px]' : 'h-80'}`}>
+          <div>
+            <p className="text-sm font-semibold text-slate-700">No mileage recorded</p>
+            <p className="mt-1 text-xs text-slate-500">No user has two readings for this ownership type.</p>
+          </div>
+        </div>
+      ) : (
+        <div className="mt-4">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <label className="relative min-w-0 flex-1">
+              <span className="sr-only">Search {style.label} users or vehicles</span>
+              <svg className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m21 21-4.35-4.35m1.35-5.65a7 7 0 1 1-14 0 7 7 0 0 1 14 0Z" />
+              </svg>
+              <input
+                type="search"
+                value={searchTerm}
+                onChange={event => setSearchTerm(event.target.value)}
+                placeholder="Search user or vehicle"
+                className="input h-9 w-full pl-9 text-xs"
+              />
+            </label>
+            <label className="flex shrink-0 items-center gap-2 text-xs font-medium text-slate-500">
+              Show
+              <select value={recordLimit} onChange={event => setRecordLimit(event.target.value)} className="input h-9 w-24 py-1 text-xs">
+                <option value="10">Top 10</option>
+                <option value="20">Top 20</option>
+                <option value="all">All</option>
+              </select>
+            </label>
+          </div>
+
+          <div className="mt-3 flex items-center justify-between text-[10px] font-medium uppercase tracking-wider text-slate-400">
+            <span>{visibleRecords.length} of {filteredRecords.length} records</span>
+            <span>Monthly mileage</span>
+          </div>
+
+          {visibleRecords.length === 0 ? (
+            <div className="mt-3 flex h-56 items-center justify-center rounded-lg border border-dashed border-slate-200 bg-white/70 text-center">
+              <div>
+                <p className="text-sm font-semibold text-slate-700">No matching records</p>
+                <p className="mt-1 text-xs text-slate-500">Try a different user or vehicle number.</p>
+              </div>
+            </div>
+          ) : (
+            <div className={`mt-2 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-sm ${expanded ? 'max-h-[calc(100vh-17rem)]' : 'max-h-[390px]'}`}>
+              <div className={`sticky top-0 z-10 grid items-center gap-3 border-b border-slate-200 bg-slate-50/95 px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500 backdrop-blur ${expanded ? 'grid-cols-[minmax(9rem,13rem)_minmax(14rem,1fr)_7rem]' : 'grid-cols-[minmax(5.5rem,7rem)_minmax(5rem,1fr)_6rem]'}`}>
+                <span>User</span>
+                <span className="flex justify-between"><span>0</span><span>{formatNumber(maximumDistance / 2)}</span><span>{formatNumber(maximumDistance)} km</span></span>
+                <span className="text-right">Distance / vehicle</span>
+              </div>
+              <div className="divide-y divide-slate-100">
+                {visibleRecords.map(record => {
+                  const userColor = getStableUserColor(record.operatorKey || record.employeeId || record.name);
+                  const percentage = Math.min(98.5, Math.max(1.5, (record.distance / maximumDistance) * 100));
+                  const detailText = `${record.name} | ${record.vehicleNumber} | ${formatKm(record.distance)} | ${record.readingCount} readings`;
+
+                  return (
+                    <div
+                      key={`${record.operatorKey}-${record.vehicleNumber}`}
+                      className={`group grid items-center gap-3 px-3 py-3 transition-colors hover:bg-slate-50 ${expanded ? 'grid-cols-[minmax(9rem,13rem)_minmax(14rem,1fr)_7rem]' : 'grid-cols-[minmax(5.5rem,7rem)_minmax(5rem,1fr)_6rem]'}`}
+                      title={detailText}
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="h-2.5 w-2.5 shrink-0 rounded-full ring-2 ring-white" style={{ backgroundColor: userColor }} aria-hidden="true" />
+                          <span className="truncate text-xs font-semibold text-slate-900" title={record.name}>{getFirstName(record.name)}</span>
+                        </div>
+                      </div>
+                      <div className="relative h-7" aria-label={detailText}>
+                        <div className="absolute left-0 right-0 top-1/2 h-px -translate-y-1/2 bg-slate-200" />
+                        <div className="absolute left-1/2 top-1 h-5 border-l border-dashed border-slate-200" />
+                        <div
+                          className="absolute left-0 top-1/2 h-0.5 -translate-y-1/2 rounded-full transition-all duration-300"
+                          style={{ width: `${percentage}%`, backgroundColor: userColor }}
+                        />
+                        <span
+                          className="absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white shadow-md ring-1 ring-slate-200 transition-transform group-hover:scale-125"
+                          style={{ left: `${percentage}%`, backgroundColor: userColor }}
+                        />
+                      </div>
+                      <div className="text-right">
+                        <span className="block whitespace-nowrap font-mono text-xs font-bold text-slate-900">{formatNumber(record.distance)} km</span>
+                        <span className="mt-1 block truncate font-mono text-[10px] font-semibold text-slate-500" title={record.vehicleNumber}>{record.vehicleNumber}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+        </div>
+      )}
+    </article>
+  );
+};
+
+const OwnershipMileageModal = ({ ownership, rows, month, onClose }) => {
+  const style = ownershipChartStyles[ownership];
+
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        onClose();
+      }
+    };
+
+    document.body.style.overflow = 'hidden';
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [onClose]);
+
+  return createPortal((
+    <div
+      className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-950/80 p-2 backdrop-blur-sm sm:p-4"
+      role="presentation"
+      onMouseDown={event => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
+      <div className="flex h-full w-full flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="ownership-chart-modal-title">
+        <div className="flex shrink-0 items-center justify-between gap-4 border-b border-slate-200 px-6 py-4">
+          <div>
+            <h3 id="ownership-chart-modal-title" className="text-lg font-semibold text-slate-950">{style.label} vehicle mileage ranking</h3>
+            <p className="mt-1 text-sm text-slate-500">Ranked user and vehicle mileage for {month}</p>
+          </div>
+          <button type="button" onClick={onClose} className="btn-secondary shrink-0 px-3 py-1.5 text-sm">Close</button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-auto">
+          <OwnershipMileageChart ownership={ownership} rows={rows} expanded />
+        </div>
+      </div>
+    </div>
+  ), document.body);
+};
+
+const ReadingDetailsModal = ({ usage, onClose }) => {
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        onClose();
+      }
+    };
+
+    document.body.style.overflow = 'hidden';
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [onClose]);
+
+  const readings = usage.readings || [];
+
+  return createPortal((
+    <div
+      className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-950/75 px-4 py-6 backdrop-blur-sm"
+      role="presentation"
+      onMouseDown={event => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
+      <div className="flex max-h-[calc(100vh-3rem)] w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="reading-details-title">
+        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-slate-200 px-6 py-5">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 id="reading-details-title" className="text-lg font-semibold text-slate-950">{usage.name}</h3>
+              <span className="rounded-md bg-brand-50 px-2 py-1 font-mono text-xs font-semibold text-brand-700">{usage.vehicleNumber}</span>
+            </div>
+            <p className="mt-1 text-sm text-slate-500">
+              {usage.employeeId || usage.username || usage.role} | Complete reading history for this recording gap
+            </p>
+          </div>
+          <button type="button" onClick={onClose} className="btn-secondary shrink-0 px-3 py-1.5 text-sm">Close</button>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <div className="grid grid-cols-1 gap-3 border-b border-slate-200 bg-slate-50 px-6 py-4 sm:grid-cols-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Total gap</p>
+              <p className="mt-1 text-xl font-bold text-brand-700">{formatKm(usage.distance)}</p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Recordings</p>
+              <p className="mt-1 text-xl font-bold text-slate-950">{formatNumber(usage.readingCount)}</p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Reading period</p>
+              <p className="mt-1 text-sm font-semibold text-slate-800">{formatReadingDetailTime(usage.startReadingAt)}</p>
+              <p className="mt-0.5 text-xs text-slate-500">to {formatReadingDetailTime(usage.endReadingAt)}</p>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[850px]">
+              <thead className="sticky top-0 z-10">
+                <tr className="border-b border-slate-200 bg-white">
+                  <th className="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Reading</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Recorded at</th>
+                  <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500">Odometer</th>
+                  <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500">Gap</th>
+                  <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500">OCR confidence</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Details</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {readings.map((reading, index) => {
+                  const context = [
+                    reading.meterType ? `Meter ${reading.meterType}` : '',
+                    reading.divisionName,
+                    reading.reason
+                  ].filter(Boolean);
+
+                  return (
+                    <tr key={reading.id || `${reading.readingAt}-${index}`} className="align-top hover:bg-slate-50">
+                      <td className="px-6 py-4">
+                        <span className="inline-flex h-7 min-w-7 items-center justify-center rounded-md bg-slate-100 px-2 text-xs font-bold text-slate-700">{index + 1}</span>
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-4 text-sm font-medium text-slate-800">{formatReadingDetailTime(reading.readingAt)}</td>
+                      <td className="whitespace-nowrap px-4 py-4 text-right font-mono text-sm font-semibold text-slate-950">{formatKm(reading.mileage)}</td>
+                      <td className={`whitespace-nowrap px-4 py-4 text-right font-mono text-sm font-semibold ${reading.gapFromPrevious < 0 ? 'text-red-600' : 'text-brand-700'}`}>
+                        {reading.gapFromPrevious == null ? '-' : formatKm(reading.gapFromPrevious)}
+                      </td>
+                      <td className="px-4 py-4 text-right font-mono text-sm text-slate-700">{formatConfidence(reading.ocrConfidence)}</td>
+                      <td className="px-4 py-4">
+                        <p className={`text-xs font-semibold ${reading.isCorrected ? 'text-amber-700' : 'text-emerald-700'}`}>
+                          {reading.isCorrected ? 'Corrected' : 'OCR reading'}
+                        </p>
+                        {reading.isCorrected && reading.originalMileage != null && (
+                          <p className="mt-1 text-xs text-slate-500">Original: {formatKm(reading.originalMileage)}</p>
+                        )}
+                        {context.length > 0 && <p className="mt-1 text-xs text-slate-500">{context.join(' | ')}</p>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  ), document.body);
+};
+
 const SearchableDropdown = ({ label, value, options, placeholder, onChange }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState('');
@@ -663,10 +1020,6 @@ const AnalyticsDashboard = () => {
   };
 
   const kpis = analytics?.kpis || {};
-  const currentVehicleMileage = useMemo(() => (
-    [...(analytics?.vehicleUsage || [])]
-      .sort((left, right) => left.vehicleNumber.localeCompare(right.vehicleNumber))
-  ), [analytics]);
   const operatorCategories = [...new Set(
     (analytics?.vehicleUsage || []).map(vehicle => vehicle.ownership).filter(Boolean)
   )].sort();

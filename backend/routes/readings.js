@@ -114,9 +114,14 @@ router.post('/', uploadMeterImage, async (req, res) => {
 
     const normalizedVehicleId = vehicleId.toUpperCase().trim();
 
-    // Optional: Validate against last reading to prevent rollback
-    const [lastReading, lastRentalReading] = await Promise.all([
-      Reading.findOne({ vehicleId: normalizedVehicleId }).sort({ readingDate: -1 }),
+    // Rental and normal readings are separate odometer streams. A rental
+    // odometer must never become the minimum allowed mileage for the user's
+    // assigned vehicle.
+    const [lastNormalReading, lastRentalReading] = await Promise.all([
+      Reading.findOne({
+        vehicleId: normalizedVehicleId,
+        isRental: { $ne: true }
+      }).sort({ readingDate: -1 }),
       Reading.findOne({ vehicleId: normalizedVehicleId, isRental: true }).sort({ readingDate: -1 })
     ]);
 
@@ -127,7 +132,7 @@ router.post('/', uploadMeterImage, async (req, res) => {
       });
     }
 
-    if (rentalRequested && !rentalIsOpen && lastReading?.meterType === 'out' && !lastReading.isRental) {
+    if (rentalRequested && !rentalIsOpen && lastNormalReading?.meterType === 'out') {
       return res.status(409).json({
         error: 'This vehicle is already checked out. Record its IN return reading before starting a rental.'
       });
@@ -141,12 +146,12 @@ router.post('/', uploadMeterImage, async (req, res) => {
       const vehicle = await Vehicle.findOne({ vehicleNumber: vehicleId.toUpperCase().trim() }).select('ownership');
 
       if (vehicle?.ownership === 'pool') {
-        const isVehicleOut = lastReading?.meterType === 'out';
-        const isSamePerson = (lastReading?.driverName || '').trim().toLowerCase() === (driverName || '').trim().toLowerCase();
+        const isVehicleOut = lastNormalReading?.meterType === 'out';
+        const isSamePerson = (lastNormalReading?.driverName || '').trim().toLowerCase() === (driverName || '').trim().toLowerCase();
 
         if (isVehicleOut && !isSamePerson) {
           return res.status(409).json({
-            error: `This vehicle is currently out with ${lastReading.driverName}. Only they can return it.`
+            error: `This vehicle is currently out with ${lastNormalReading.driverName}. Only they can return it.`
           });
         }
 
@@ -154,10 +159,18 @@ router.post('/', uploadMeterImage, async (req, res) => {
       }
     }
 
-    if (lastReading && mileageNumber < lastReading.extractedMileage) {
+    // A rental return is checked against its matching OUT reading. A fresh
+    // rental checkout may be a different hired vehicle, so it starts without
+    // inheriting an older rental odometer. Normal readings always use the last
+    // non-rental reading for the assigned vehicle.
+    const comparisonReading = rentalRequested
+      ? (rentalIsOpen ? lastRentalReading : null)
+      : lastNormalReading;
+
+    if (comparisonReading && mileageNumber < comparisonReading.extractedMileage) {
       return res.status(400).json({
         error: 'Mileage is less than last recorded reading',
-        lastReading: lastReading.extractedMileage,
+        lastReading: comparisonReading.extractedMileage,
         hint: 'Odometer cannot decrease. Check for misread digits.'
       });
     }
@@ -166,8 +179,8 @@ router.post('/', uploadMeterImage, async (req, res) => {
     // A larger gap is informational only; the reading is still saved.
     const exceedsPoolGap = !rentalRequested
       && meterType === 'out'
-      && lastReading?.meterType === 'in'
-      && mileageNumber - lastReading.extractedMileage > MAX_POOL_IN_TO_OUT_GAP_KM;
+      && lastNormalReading?.meterType === 'in'
+      && mileageNumber - lastNormalReading.extractedMileage > MAX_POOL_IN_TO_OUT_GAP_KM;
 
     let cloudinaryPublicId;
     try {
@@ -400,7 +413,7 @@ router.get('/stats/:vehicleId', async (req, res) => {
     const vehicleId = req.params.vehicleId.toUpperCase();
 
     const [readings, vehicle] = await Promise.all([
-      Reading.find({ vehicleId })
+      Reading.find({ vehicleId, isRental: { $ne: true } })
         .sort({ readingDate: 1 })
         .select('extractedMileage readingDate meterType'),
       Vehicle.findOne({ vehicleNumber: vehicleId }).select('ownership')
