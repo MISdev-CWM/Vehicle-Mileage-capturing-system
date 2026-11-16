@@ -94,6 +94,7 @@ const runMonthlyMileageReminder = async ({ now = new Date(), dryRun = false, onl
     // Skip vehicles that already have a reading this month.
     const hasReading = await Reading.exists({
       vehicleId: vehicleNumber,
+      isRental: { $ne: true },
       readingDate: { $gte: monthStart, $lte: now }
     });
 
