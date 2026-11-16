@@ -12,7 +12,7 @@ const readingSchema = new mongoose.Schema({
     required: true,
     min: 0
   },
-  meterImageDriveId: {
+  meterImageCloudinaryId: {
     type: String,
     default: null,
     select: false

@@ -7,7 +7,7 @@ const CompanyDriver = require('../models/CompanyDriver');
 const Division = require('../models/Division');
 const User = require('../models/User');
 const { authenticate, authorizeRoles } = require('../middleware/auth');
-const { uploadMeterPhoto, downloadMeterPhoto, deleteMeterPhoto } = require('../utils/googleDrive');
+const { uploadMeterPhoto, downloadMeterPhoto, deleteMeterPhoto } = require('../utils/cloudinary');
 
 // Calendar date (YYYY-MM-DD) in Sri Lankan time.
 const getColomboDateKey = (value) => {
@@ -169,13 +169,8 @@ router.post('/', uploadMeterImage, async (req, res) => {
       && lastReading?.meterType === 'in'
       && mileageNumber - lastReading.extractedMileage > MAX_POOL_IN_TO_OUT_GAP_KM;
 
-    let driveFileId;
+    let cloudinaryPublicId;
     try {
-      const fileExtension = {
-        'image/jpeg': 'jpg',
-        'image/png': 'png',
-        'image/webp': 'webp'
-      }[req.file.mimetype];
       const fileNamePart = value => value.replace(/[^a-zA-Z0-9_-]/g, '_');
       const vehicleNumber = vehicleId.toUpperCase().trim();
       const timestamp = new Date().toISOString().replace('T', '_').replace(/[:.]/g, '-');
@@ -185,28 +180,27 @@ router.post('/', uploadMeterImage, async (req, res) => {
         timestamp
       ].join('_');
 
-      driveFileId = await uploadMeterPhoto({
+      cloudinaryPublicId = await uploadMeterPhoto({
         buffer: req.file.buffer,
-        contentType: req.file.mimetype,
-        fileName: `${fileName}.${fileExtension}`
+        fileName
       });
     } catch (error) {
-      console.error('Google Drive meter photo upload error:', {
+      console.error('Cloudinary meter photo upload error:', {
         message: error.message,
         code: error.code,
         status: error.response?.status
       });
       return res.status(502).json({
-        error: error.message.startsWith('Google Drive configuration is missing:')
+        error: error.message.startsWith('Cloudinary configuration is missing:')
           ? error.message
-          : 'Could not upload the meter photo to Google Drive. Check backend logs and Drive permissions.'
+          : 'Could not upload the meter photo to Cloudinary. Check backend logs and Cloudinary configuration.'
       });
     }
 
     const reading = new Reading({
       vehicleId: vehicleId.toUpperCase().trim(),
       extractedMileage: mileageNumber,
-      meterImageDriveId: driveFileId,
+      meterImageCloudinaryId: cloudinaryPublicId,
       meterImageContentType: req.file.mimetype,
       hasMeterImage: true,
       isCorrected: false,
@@ -224,9 +218,9 @@ router.post('/', uploadMeterImage, async (req, res) => {
       await reading.save();
     } catch (error) {
       try {
-        await deleteMeterPhoto(driveFileId);
+        await deleteMeterPhoto(cloudinaryPublicId);
       } catch (cleanupError) {
-        console.error('Google Drive orphaned meter photo cleanup error:', cleanupError);
+        console.error('Cloudinary orphaned meter photo cleanup error:', cleanupError);
       }
       throw error;
     }
@@ -502,7 +496,7 @@ router.put('/:id', authorizeRoles(...ADMIN_ROLES), async (req, res) => {
 // DELETE /api/readings/:id — Admin can remove an incorrect reading
 router.delete('/:id', authorizeRoles(...ADMIN_ROLES), async (req, res) => {
   try {
-    const reading = await Reading.findById(req.params.id).select('+meterImageDriveId');
+    const reading = await Reading.findById(req.params.id).select('+meterImageCloudinaryId');
 
     if (!reading) {
       return res.status(404).json({ error: 'Reading not found' });
@@ -510,12 +504,12 @@ router.delete('/:id', authorizeRoles(...ADMIN_ROLES), async (req, res) => {
 
     await Reading.findByIdAndDelete(req.params.id);
 
-    if (reading.meterImageDriveId) {
+    if (reading.meterImageCloudinaryId) {
       try {
-        await deleteMeterPhoto(reading.meterImageDriveId);
+        await deleteMeterPhoto(reading.meterImageCloudinaryId);
       } catch (error) {
-        console.error('Google Drive meter photo deletion error:', error);
-        return res.status(502).json({ error: 'Reading deleted, but its Google Drive photo could not be deleted.' });
+        console.error('Cloudinary meter photo deletion error:', error);
+        return res.status(502).json({ error: 'Reading deleted, but its Cloudinary photo could not be deleted.' });
       }
     }
 
@@ -530,14 +524,14 @@ router.delete('/:id', authorizeRoles(...ADMIN_ROLES), async (req, res) => {
 router.get('/:id/image', authorizeRoles(...ADMIN_ROLES), async (req, res) => {
   try {
     const reading = await Reading.findById(req.params.id)
-      .select('+meterImageDriveId +meterImageContentType');
-    if (!reading?.meterImageDriveId) {
+      .select('+meterImageCloudinaryId +meterImageContentType');
+    if (!reading?.meterImageCloudinaryId) {
       return res.status(404).json({ error: 'Meter photo not found' });
     }
 
-    const image = await downloadMeterPhoto(reading.meterImageDriveId);
+    const image = await downloadMeterPhoto(reading.meterImageCloudinaryId);
     res.set('Cache-Control', 'private, no-store');
-    res.type(reading.meterImageContentType || 'application/octet-stream').send(image);
+    res.type(image.contentType || reading.meterImageContentType || 'application/octet-stream').send(image.buffer);
   } catch (error) {
     console.error('Meter photo load error:', {
       message: error.message,
@@ -545,9 +539,9 @@ router.get('/:id/image', authorizeRoles(...ADMIN_ROLES), async (req, res) => {
       status: error.response?.status
     });
     res.status(502).json({
-      error: error.message.startsWith('Google Drive configuration is missing:')
+      error: error.message.startsWith('Cloudinary configuration is missing:')
         ? error.message
-        : 'Failed to load meter photo from Google Drive. Check backend logs and Drive permissions.'
+        : 'Failed to load meter photo from Cloudinary. Check backend logs and Cloudinary configuration.'
     });
   }
 });
