@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import api from './api';
 import AdminDashboard from './components/AdminDashboard';
 import AnalyticsDashboard from './components/AnalyticsDashboard';
+import BrandLogo from './components/BrandLogo';
 import CompanyDriverManagement from './components/CompanyDriverManagement';
 import DivisionManagement from './components/DivisionManagement';
 import EmployeeManagement from './components/EmployeeManagement';
@@ -370,14 +371,9 @@ function App() {
       <header className="bg-white border-b border-slate-200 sticky top-0 z-40">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 bg-brand-600 rounded-lg flex items-center justify-center shadow-sm">
-              <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17a2 2 0 11-4 0 2 2 0 014 0zM19 17a2 2 0 11-4 0 2 2 0 014 0z" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16V6a1 1 0 00-1-1H4a1 1 0 00-1 1v10a1 1 0 001 1h1m8-1a1 1 0 01-1 1H9m4-1V8a1 1 0 011-1h2.586a1 1 0 01.707.293l3.414 3.414a1 1 0 01.293.707V16a1 1 0 01-1 1h-1" />
-              </svg>
-            </div>
+            <BrandLogo className="h-10 w-10 shrink-0 drop-shadow-sm" />
             <div>
-              <h1 className="text-lg font-bold text-slate-900 leading-tight">Fleet Mileage</h1>
+              <h1 className="text-lg font-bold leading-tight tracking-tight"><span className="text-slate-950">Auto</span><span className="text-brand-600">Insights</span></h1>
               <p className="text-xs text-slate-500">{isAdmin ? 'Admin control panel' : 'Camera-based odometer tracking'}</p>
             </div>
           </div>

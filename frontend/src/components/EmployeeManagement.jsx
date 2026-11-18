@@ -402,7 +402,7 @@ const EmployeeManagement = () => {
                     value={formData.email}
                     onChange={(e) => handleChange('email', e.target.value)}
                     className="input"
-                    placeholder="employee@fleet.local"
+                    placeholder="employee@company.com"
                     required={formData.role !== 'driver'}
                   />
                 </div>
