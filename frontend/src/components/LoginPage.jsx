@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import api from '../api';
+import BrandLogo from './BrandLogo';
 
 const LoginPage = ({ onLogin }) => {
   const [formData, setFormData] = useState({
@@ -29,14 +30,9 @@ const LoginPage = ({ onLogin }) => {
     <div className="min-h-screen bg-slate-50 flex items-center justify-center px-4 py-10">
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
-          <div className="w-14 h-14 bg-brand-600 rounded-xl flex items-center justify-center mx-auto mb-4 shadow-sm">
-            <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17a2 2 0 11-4 0 2 2 0 014 0zM19 17a2 2 0 11-4 0 2 2 0 014 0z" />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16V6a1 1 0 00-1-1H4a1 1 0 00-1 1v10a1 1 0 001 1h1m8-1a1 1 0 01-1 1H9m4-1V8a1 1 0 011-1h2.586a1 1 0 01.707.293l3.414 3.414a1 1 0 01.293.707V16a1 1 0 01-1 1h-1" />
-            </svg>
-          </div>
-          <h1 className="text-2xl font-bold text-slate-900">Fleet Mileage</h1>
-          <p className="text-sm text-slate-500 mt-1">Sign in to continue</p>
+          <BrandLogo className="mx-auto mb-4 h-16 w-16 drop-shadow-lg" />
+          <h1 className="text-3xl font-bold tracking-tight"><span className="text-slate-950">Auto</span><span className="text-brand-600">Insights</span></h1>
+          <p className="mt-1.5 text-sm font-medium text-slate-500">Vehicle Mileage &amp; Usage Intelligence</p>
         </div>
 
         <form onSubmit={handleSubmit} className="card space-y-5">
@@ -53,7 +49,7 @@ const LoginPage = ({ onLogin }) => {
               value={formData.email}
               onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
               className="input"
-              placeholder="admin or admin@fleet.local"
+              placeholder="Enter username or email"
               autoComplete="username"
               autoFocus
               required

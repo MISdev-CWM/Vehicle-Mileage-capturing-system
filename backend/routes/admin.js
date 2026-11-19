@@ -325,7 +325,7 @@ const parseRangeBoundary = (value, endOfDay = false) => {
   return Number.isNaN(date.getTime()) ? null : date;
 };
 
-const createRangeUsage = (readings, userMap) => {
+const createRangeUsage = (readings, userMap, { includeSingleReadingSessions = false } = {}) => {
   const readingsByVehicle = new Map();
 
   readings.forEach(reading => {
@@ -375,46 +375,60 @@ const createRangeUsage = (readings, userMap) => {
 
     return sessions;
   })
-    .filter(session => session.readingCount >= 2)
-    .map(session => ({
-      key: session.key,
-      operatorKey: session.operator.key,
-      userId: session.userId,
-      name: session.operator.name,
-      employeeId: session.operator.employeeId,
-      username: session.operator.username,
-      role: session.operator.role,
-      vehicleNumber: session.vehicleNumber,
-      startMileage: session.firstReading.reading.extractedMileage,
-      endMileage: session.lastReading.reading.extractedMileage,
-      startReadingAt: session.firstReading.readingDate,
-      endReadingAt: session.lastReading.readingDate,
-      readingCount: session.readingCount,
-      readings: session.readings.map((entry, index) => {
-        const previousEntry = session.readings[index - 1];
+    .filter(session => includeSingleReadingSessions || session.readingCount >= 2)
+    .map(session => {
+      const isPending = session.readingCount < 2;
 
-        return {
-          id: entry.reading._id,
-          readingAt: entry.readingDate,
-          mileage: entry.reading.extractedMileage,
-          gapFromPrevious: previousEntry
-            ? Math.round(entry.reading.extractedMileage - previousEntry.reading.extractedMileage)
-            : null,
-          ocrConfidence: entry.reading.ocrConfidence,
-          isCorrected: entry.reading.isCorrected,
-          originalMileage: entry.reading.originalMileage,
-          divisionName: entry.reading.divisionName || '',
-          reason: entry.reading.reason || '',
-          meterType: entry.reading.meterType || null
-        };
-      }),
-      distance: Math.round(
-        session.lastReading.reading.extractedMileage
-        - session.firstReading.reading.extractedMileage
-      )
-    }))
-    .filter(usage => usage.distance >= 0)
-    .sort((left, right) => right.distance - left.distance || left.name.localeCompare(right.name));
+      return {
+        key: session.key,
+        operatorKey: session.operator.key,
+        userId: session.userId,
+        name: session.operator.name,
+        employeeId: session.operator.employeeId,
+        username: session.operator.username,
+        role: session.operator.role,
+        vehicleNumber: session.vehicleNumber,
+        startMileage: session.firstReading.reading.extractedMileage,
+        endMileage: isPending ? null : session.lastReading.reading.extractedMileage,
+        startReadingAt: session.firstReading.readingDate,
+        endReadingAt: isPending ? null : session.lastReading.readingDate,
+        daysBetween: isPending
+          ? null
+          : getCalendarDayDifference(
+            session.firstReading.readingDate,
+            session.lastReading.readingDate
+          ),
+        isPending,
+        readingCount: session.readingCount,
+        readings: session.readings.map((entry, index) => {
+          const previousEntry = session.readings[index - 1];
+
+          return {
+            id: entry.reading._id,
+            readingAt: entry.readingDate,
+            mileage: entry.reading.extractedMileage,
+            gapFromPrevious: previousEntry
+              ? Math.round(entry.reading.extractedMileage - previousEntry.reading.extractedMileage)
+              : null,
+            ocrConfidence: entry.reading.ocrConfidence,
+            isCorrected: entry.reading.isCorrected,
+            originalMileage: entry.reading.originalMileage,
+            divisionName: entry.reading.divisionName || '',
+            reason: entry.reading.reason || '',
+            meterType: entry.reading.meterType || null
+          };
+        }),
+        distance: isPending
+          ? null
+          : Math.round(
+            session.lastReading.reading.extractedMileage
+            - session.firstReading.reading.extractedMileage
+          )
+      };
+    })
+    .filter(usage => usage.isPending || usage.distance >= 0)
+    .sort((left, right) => (right.distance ?? -1) - (left.distance ?? -1)
+      || left.name.localeCompare(right.name));
 };
 
 const createOwnershipUserMileage = (readings, userMap, vehicleMap) => {
@@ -473,7 +487,7 @@ const createOwnershipUserMileage = (readings, userMap, vehicleMap) => {
   ]));
 };
 
-const getColomboDateKey = (value) => {
+function getColomboDateKey(value) {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Colombo',
     year: 'numeric',
@@ -483,6 +497,15 @@ const getColomboDateKey = (value) => {
   const getPart = (type) => parts.find(part => part.type === type)?.value;
 
   return `${getPart('year')}-${getPart('month')}-${getPart('day')}`;
+}
+
+const getCalendarDayDifference = (startValue, endValue) => {
+  const [startYear, startMonth, startDay] = getColomboDateKey(startValue).split('-').map(Number);
+  const [endYear, endMonth, endDay] = getColomboDateKey(endValue).split('-').map(Number);
+  const startDate = Date.UTC(startYear, startMonth - 1, startDay);
+  const endDate = Date.UTC(endYear, endMonth - 1, endDay);
+
+  return Math.max(0, Math.round((endDate - startDate) / 86400000));
 };
 
 // All YYYY-MM-DD dates from start to end inclusive, to calculate number of days per month for pool vehicle in Analytics.
@@ -561,11 +584,20 @@ router.get('/analytics', async (req, res) => {
     }
 
     const requestedMonth = req.query.month?.trim();
+    const requestedRangeMode = req.query.rangeMode?.trim().toLowerCase();
     const requestedCategory = req.query.category?.trim().toLowerCase();
     const requestedVehicleNumber = req.query.vehicleNumber?.trim().toUpperCase();
 
     if (requestedMonth && !monthInputPattern.test(requestedMonth)) {
       return res.status(400).json({ error: 'Month must be in YYYY-MM format' });
+    }
+
+    if (requestedRangeMode && !['monthly', 'custom'].includes(requestedRangeMode)) {
+      return res.status(400).json({ error: 'Range mode must be monthly or custom' });
+    }
+
+    if (requestedRangeMode === 'monthly' && (!hasRequestedRange || !requestedMonth)) {
+      return res.status(400).json({ error: 'Monthly range reports require a month, start date, and end date' });
     }
 
     const [readings, vehicles, users, companyDriverCount] = await Promise.all([
@@ -584,6 +616,7 @@ router.get('/analytics', async (req, res) => {
     const [selectedYear, selectedMonthNumber] = selectedMonth.split('-').map(Number);
     const selectedMonthStart = parseRangeBoundary(`${selectedMonth}-01`);
     const nextMonthStart = parseRangeBoundary(new Date(Date.UTC(selectedYear, selectedMonthNumber, 1)).toISOString().slice(0, 10));
+    const monthAfterNextStart = parseRangeBoundary(new Date(Date.UTC(selectedYear, selectedMonthNumber + 1, 1)).toISOString().slice(0, 10));
 
     const userMap = new Map(users.map(user => [user._id.toString(), user]));
     const vehicleMap = new Map();
@@ -718,19 +751,51 @@ router.get('/analytics', async (req, res) => {
         vehicles: operator.vehicles.sort()
       }))
       .sort((a, b) => b.totalDistance - a.totalDistance || b.readingCount - a.readingCount);
-    const rangeReadings = hasRequestedRange
+    const matchesRangeVehicleFilters = reading => {
+      const vehicleNumber = reading.vehicleId?.toUpperCase();
+      const category = vehicleCategoryByNumber.get(vehicleNumber) || 'unknown';
+
+      return (!requestedVehicleNumber || vehicleNumber === requestedVehicleNumber)
+        && (!requestedCategory || category.toLowerCase() === requestedCategory);
+    };
+    const selectedRangeReadings = hasRequestedRange
       ? readings.filter(reading => {
         const readingDate = new Date(reading.readingDate);
-        const vehicleNumber = reading.vehicleId?.toUpperCase();
-        const category = vehicleCategoryByNumber.get(vehicleNumber) || 'unknown';
-
         return readingDate >= rangeStart
           && readingDate <= rangeEnd
-          && (!requestedVehicleNumber || vehicleNumber === requestedVehicleNumber)
-          && (!requestedCategory || category.toLowerCase() === requestedCategory);
+          && matchesRangeVehicleFilters(reading);
       })
       : [];
-    const rangeUsage = createRangeUsage(rangeReadings, userMap);
+    let rangeReadings = selectedRangeReadings;
+
+    if (requestedRangeMode === 'monthly') {
+      const selectedOperatorVehicleKeys = new Set(selectedRangeReadings.map(reading => (
+        `${reading.vehicleId?.toUpperCase()}:${getOperatorKey(reading)}`
+      )));
+      const firstFollowingMonthReadingByKey = new Map();
+
+      readings.forEach(reading => {
+        const readingDate = new Date(reading.readingDate);
+        if (readingDate < nextMonthStart
+          || readingDate >= monthAfterNextStart
+          || !matchesRangeVehicleFilters(reading)) {
+          return;
+        }
+
+        const key = `${reading.vehicleId?.toUpperCase()}:${getOperatorKey(reading)}`;
+        if (selectedOperatorVehicleKeys.has(key) && !firstFollowingMonthReadingByKey.has(key)) {
+          firstFollowingMonthReadingByKey.set(key, reading);
+        }
+      });
+
+      rangeReadings = [
+        ...selectedRangeReadings,
+        ...firstFollowingMonthReadingByKey.values()
+      ];
+    }
+    const rangeUsage = createRangeUsage(rangeReadings, userMap, {
+      includeSingleReadingSessions: requestedRangeMode === 'monthly'
+    });
     const rangeDistance = rangeUsage.reduce((total, usage) => total + usage.distance, 0);
     const monthReadings = readings.filter(reading => {
       const readingDate = new Date(reading.readingDate);

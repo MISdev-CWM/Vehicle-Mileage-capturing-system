@@ -71,6 +71,25 @@ const getCurrentMonth = () => getDateInputValue(new Date()).slice(0, 7);
 
 const isSelectableMonth = (value) => /^\d{4}-(0[1-9]|1[0-2])$/.test(value) && value <= getCurrentMonth();
 
+const formatMonthLabel = (value) => {
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(value || '')) {
+    return '';
+  }
+
+  const [year, month] = value.split('-').map(Number);
+  return new Date(year, month - 1, 1).toLocaleDateString(undefined, {
+    month: 'long',
+    year: 'numeric'
+  });
+};
+
+const getFollowingMonth = (value) => {
+  const [year, month] = value.split('-').map(Number);
+  const followingMonth = new Date(year, month, 1);
+
+  return `${followingMonth.getFullYear()}-${String(followingMonth.getMonth() + 1).padStart(2, '0')}`;
+};
+
 const getDefaultDateRange = () => {
   const today = new Date();
   const start = new Date(today.getFullYear(), today.getMonth(), 1);
@@ -590,7 +609,7 @@ const ReadingDetailsModal = ({ usage, onClose }) => {
               <span className="rounded-md bg-brand-50 px-2 py-1 font-mono text-xs font-semibold text-brand-700">{usage.vehicleNumber}</span>
             </div>
             <p className="mt-1 text-sm text-slate-500">
-              {usage.employeeId || usage.username || usage.role} | Complete reading history for this recording gap
+              {usage.employeeId || usage.username || usage.role} | {usage.isPending ? 'Reading received; awaiting the next monthly reading' : 'Complete reading history for this recording gap'}
             </p>
           </div>
           <button type="button" onClick={onClose} className="btn-secondary shrink-0 px-3 py-1.5 text-sm">Close</button>
@@ -600,7 +619,11 @@ const ReadingDetailsModal = ({ usage, onClose }) => {
           <div className="grid grid-cols-1 gap-3 border-b border-slate-200 bg-slate-50 px-6 py-4 sm:grid-cols-3">
             <div>
               <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Total gap</p>
-              <p className="mt-1 text-xl font-bold text-brand-700">{formatKm(usage.distance)}</p>
+              {usage.isPending ? (
+                <span className="mt-1 inline-flex rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1 text-sm font-semibold text-amber-800">Pending</span>
+              ) : (
+                <p className="mt-1 text-xl font-bold text-brand-700">{formatKm(usage.distance)}</p>
+              )}
             </div>
             <div>
               <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Recordings</p>
@@ -609,7 +632,7 @@ const ReadingDetailsModal = ({ usage, onClose }) => {
             <div>
               <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Reading period</p>
               <p className="mt-1 text-sm font-semibold text-slate-800">{formatReadingDetailTime(usage.startReadingAt)}</p>
-              <p className="mt-0.5 text-xs text-slate-500">to {formatReadingDetailTime(usage.endReadingAt)}</p>
+              <p className="mt-0.5 text-xs text-slate-500">{usage.isPending ? 'Awaiting next reading' : `to ${formatReadingDetailTime(usage.endReadingAt)}`}</p>
             </div>
           </div>
 
@@ -789,6 +812,10 @@ const AnalyticsDashboard = () => {
     month: getCurrentMonth(),
     ...getDefaultDateRange()
   }));
+  const [appliedOperatorPeriod, setAppliedOperatorPeriod] = useState(() => ({
+    period: 'monthly',
+    month: getCurrentMonth()
+  }));
   const [operatorUsage, setOperatorUsage] = useState([]);
   const [operatorError, setOperatorError] = useState('');
   const [contributionFilters, setContributionFilters] = useState(() => getDefaultDateRange());
@@ -911,14 +938,21 @@ const AnalyticsDashboard = () => {
       fetchRangeUsage(initialRange)
         .then(rows => {
           setReportUsage(rows);
-          setOperatorUsage(rows);
           setContributionUsage(rows);
         })
         .catch(err => {
           const message = err.response?.data?.error || 'Failed to load date range analytics';
           setReportError(message);
-          setOperatorError(message);
           setContributionError(message);
+        });
+      fetchRangeUsage({
+        ...initialRange,
+        month: getCurrentMonth(),
+        rangeMode: 'monthly'
+      })
+        .then(setOperatorUsage)
+        .catch(err => {
+          setOperatorError(err.response?.data?.error || 'Failed to load monthly recording gaps');
         });
     }, 0);
     const refreshTimer = window.setInterval(() => fetchAnalytics({ background: true }), 15000);
@@ -1009,9 +1043,17 @@ const AnalyticsDashboard = () => {
       const rows = await fetchRangeUsage({
         ...range,
         category: operatorFilters.category,
-        vehicleNumber: operatorFilters.vehicleNumber
+        vehicleNumber: operatorFilters.vehicleNumber,
+        rangeMode: operatorFilters.period,
+        ...(operatorFilters.period === 'monthly' && { month: operatorFilters.month })
       });
       setOperatorUsage(rows);
+      setAppliedOperatorPeriod({
+        period: operatorFilters.period,
+        month: operatorFilters.month,
+        startDate: range.startDate,
+        endDate: range.endDate
+      });
     } catch (err) {
       setOperatorError(err.response?.data?.error || 'Failed to load analytics for this date range');
     } finally {
@@ -1027,6 +1069,14 @@ const AnalyticsDashboard = () => {
     .filter(vehicle => !operatorFilters.category || vehicle.ownership === operatorFilters.category)
     .map(vehicle => vehicle.vehicleNumber)
     .sort((left, right) => left.localeCompare(right));
+  const isCurrentOperatorMonth = appliedOperatorPeriod.period === 'monthly'
+    && appliedOperatorPeriod.month === getCurrentMonth();
+  const currentOperatorMonthLabel = formatMonthLabel(appliedOperatorPeriod.month);
+  const followingOperatorMonthLabel = appliedOperatorPeriod.month
+    ? formatMonthLabel(getFollowingMonth(appliedOperatorPeriod.month))
+    : '';
+  const completedOperatorGaps = operatorUsage.filter(usage => !usage.isPending).length;
+  const pendingOperatorReadings = operatorUsage.filter(usage => usage.isPending).length;
   const reportSummary = useMemo(() => summarizeUsage(reportUsage), [reportUsage]);
   const contributionSummary = useMemo(() => summarizeUsage(contributionUsage), [contributionUsage]);
   const reportDistance = reportUsage.reduce((total, row) => total + row.distance, 0);
@@ -1195,7 +1245,7 @@ const AnalyticsDashboard = () => {
       <div className="flex flex-col xl:flex-row xl:items-end xl:justify-between gap-4">
         <div>
           <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Admin</p>
-          <h2 className="text-2xl font-bold text-slate-950 mt-0.5">Fleet Analytics</h2>
+          <h2 className="text-2xl font-bold text-slate-950 mt-0.5">AutoInsights Analytics</h2>
           <p className="text-sm text-slate-500 mt-1">
             Executive mileage insights across vehicles, drivers, and usage.
           </p>
@@ -1410,9 +1460,28 @@ const AnalyticsDashboard = () => {
       <section className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
         <div className="px-6 py-5 border-b border-slate-100 flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
           <div>
-            <h3 className="text-lg font-semibold text-slate-950">Operator &amp; Vehicle Recording Gaps</h3>
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-lg font-semibold text-slate-950">Operator &amp; Vehicle Recording Gaps</h3>
+              {isCurrentOperatorMonth && (
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-800">
+                  <span className="relative flex h-2 w-2" aria-hidden="true">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-60" />
+                    <span className="relative inline-flex h-2 w-2 rounded-full bg-amber-500" />
+                  </span>
+                  Month in progress
+                </span>
+              )}
+            </div>
             <p className="text-sm text-slate-500 mt-1">First-to-last odometer difference for each continuous operator and vehicle session.</p>
-            <p className="text-xs font-semibold text-slate-500 mt-2">{operatorUsage.length} recording gaps</p>
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs font-semibold">
+              <span className="text-slate-500">{completedOperatorGaps} completed {completedOperatorGaps === 1 ? 'gap' : 'gaps'}</span>
+              {pendingOperatorReadings > 0 && (
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-amber-800">
+                  <span className="h-1.5 w-1.5 rounded-full bg-amber-500" aria-hidden="true" />
+                  {pendingOperatorReadings} awaiting next reading
+                </span>
+              )}
+            </div>
           </div>
           <form onSubmit={searchOperatorUsage} className="w-full xl:max-w-4xl rounded-lg border border-slate-200 bg-slate-50 p-3">
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
@@ -1518,28 +1587,62 @@ const AnalyticsDashboard = () => {
                 </button>
               </div>
             </div>
-            {operatorFilters.period === 'custom' && (
-              <p className="mt-2 text-xs text-slate-500">Custom date range is limited to 60 days.</p>
+            {operatorFilters.period === 'monthly' ? (
+              <p className="mt-2 text-xs text-slate-500">
+                Monthly results include all readings from the selected month and the first available reading from the following month for the same user and vehicle.
+              </p>
+            ) : (
+              <p className="mt-2 text-xs text-slate-500">Custom date range is limited to 60 days and does not include readings outside the selected dates.</p>
             )}
             {operatorError && <p className="mt-2 text-xs font-medium text-red-600" role="alert">{operatorError}</p>}
           </form>
         </div>
 
+        {isCurrentOperatorMonth && (
+          <div className="border-b border-blue-100 bg-blue-50/70 px-6 py-4" role="status">
+            <div className="flex items-start gap-3">
+              <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-blue-200 bg-white text-blue-700 shadow-sm" aria-hidden="true">
+                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 2m6-2a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+                </svg>
+              </span>
+              <div>
+                <p className="text-sm font-semibold text-blue-950">{currentOperatorMonthLabel} mileage is still in progress</p>
+                <p className="mt-1 text-xs leading-5 text-blue-800">
+                  Final mileage for {currentOperatorMonthLabel} will be available after the mandatory reading is submitted during the first five days of {followingOperatorMonthLabel}. Values currently shown are provisional and may not represent the complete month.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
         {operatorUsage.length === 0 ? (
-          <EmptyState title="No mileage gaps in this range" text="At least two recordings from the same operator and vehicle are required." />
+          <EmptyState title="No readings in this range" text="Monthly readings and completed mileage gaps will appear here." />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[1120px]">
+          <div className="w-full overflow-hidden">
+            <table className="w-full table-fixed">
+              <colgroup>
+                <col className="w-[18%]" />
+                <col className="w-[9%]" />
+                <col className="w-[14%]" />
+                <col className="w-[14%]" />
+                <col className="w-[10%]" />
+                <col className="w-[10%]" />
+                <col className="w-[11%]" />
+                <col className="w-[6%]" />
+                <col className="w-[8%]" />
+              </colgroup>
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-200">
-                  <th className="px-6 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">User / Driver</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Vehicle</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">First recording</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Last recording</th>
-                  <th className="px-4 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">Start km</th>
-                  <th className="px-4 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">End km</th>
-                  <th className="px-4 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">Gap</th>
-                  <th className="px-4 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">Recordings</th>
+                  <th className="py-3 pl-4 pr-2 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">User / Driver</th>
+                  <th className="px-2 py-3 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">Vehicle</th>
+                  <th className="px-2 py-3 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">First recording</th>
+                  <th className="px-2 py-3 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">Last recording</th>
+                  <th className="px-2 py-3 text-right text-[11px] font-semibold uppercase tracking-wide text-slate-500">Start km</th>
+                  <th className="px-2 py-3 text-right text-[11px] font-semibold uppercase tracking-wide text-slate-500">End km</th>
+                  <th className="px-2 py-3 text-right text-[11px] font-semibold uppercase tracking-wide text-slate-500">Mileage Gap</th>
+                  <th className="px-1 py-3 text-right text-[11px] font-semibold uppercase tracking-wide text-slate-500">Days</th>
+                  <th className="py-3 pl-1 pr-4 text-right text-[11px] font-semibold uppercase tracking-wide text-slate-500 break-words">Recordings</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -1555,25 +1658,32 @@ const AnalyticsDashboard = () => {
                     }}
                     tabIndex={0}
                     role="button"
-                    aria-label={`View readings for ${usage.name} and vehicle ${usage.vehicleNumber}`}
-                    className="cursor-pointer align-top transition-colors hover:bg-slate-50 focus:bg-brand-50 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-brand-500"
+                    aria-label={`View ${usage.isPending ? 'pending reading' : 'recordings'} for ${usage.name} and vehicle ${usage.vehicleNumber}`}
+                    className={`cursor-pointer align-top transition-colors focus:bg-brand-50 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-brand-500 ${usage.isPending ? 'bg-amber-50/40 hover:bg-amber-50/70' : 'hover:bg-slate-50'}`}
                   >
-                    <td className="px-6 py-4">
+                    <td className="py-4 pl-4 pr-2">
                       <div className="group text-left">
-                        <span className="block text-sm font-semibold text-slate-950 group-hover:text-brand-700">{usage.name}</span>
+                        <span className="block break-words text-sm font-semibold text-slate-950 group-hover:text-brand-700">{usage.name}</span>
                         <span className="mt-1 block text-xs capitalize text-slate-500">
                           {usage.employeeId || usage.username || usage.role}
                         </span>
-                        <span className="mt-1.5 block text-xs font-semibold text-brand-600 group-hover:text-brand-700">View readings</span>
+                        <span className="mt-1.5 block text-[11px] font-semibold text-brand-600 group-hover:text-brand-700">View readings</span>
                       </div>
                     </td>
-                    <td className="px-4 py-4 font-mono text-sm font-semibold text-slate-900">{usage.vehicleNumber}</td>
-                    <td className="px-4 py-4 text-xs text-slate-600 whitespace-nowrap">{formatReadingTime(usage.startReadingAt)}</td>
-                    <td className="px-4 py-4 text-xs text-slate-600 whitespace-nowrap">{formatReadingTime(usage.endReadingAt)}</td>
-                    <td className="px-4 py-4 text-right font-mono text-sm text-slate-700">{formatNumber(usage.startMileage)}</td>
-                    <td className="px-4 py-4 text-right font-mono text-sm text-slate-700">{formatNumber(usage.endMileage)}</td>
-                    <td className="px-4 py-4 text-right font-mono text-sm font-bold text-brand-700">{formatKm(usage.distance)}</td>
-                    <td className="px-4 py-4 text-right font-mono text-sm font-semibold text-slate-900">{formatNumber(usage.readingCount)}</td>
+                    <td className="break-words px-2 py-4 font-mono text-xs font-semibold text-slate-900">{usage.vehicleNumber}</td>
+                    <td className="px-2 py-4 text-xs leading-5 text-slate-600">{formatReadingTime(usage.startReadingAt)}</td>
+                    <td className="px-2 py-4 text-xs leading-5 text-slate-600">
+                      {usage.isPending ? (
+                        <span className="inline-flex rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-[10px] font-semibold leading-4 text-amber-800">Awaiting next reading</span>
+                      ) : formatReadingTime(usage.endReadingAt)}
+                    </td>
+                    <td className="px-2 py-4 text-right font-mono text-xs text-slate-700">{formatNumber(usage.startMileage)}</td>
+                    <td className="px-2 py-4 text-right font-mono text-xs text-slate-700">{usage.isPending ? '-' : formatNumber(usage.endMileage)}</td>
+                    <td className="px-2 py-4 text-right font-mono text-xs font-bold text-brand-700">
+                      {usage.isPending ? <span className="text-amber-700">Pending</span> : formatKm(usage.distance)}
+                    </td>
+                    <td className="px-1 py-4 text-right font-mono text-xs font-semibold text-slate-700" title="Calendar days between the first and last recordings">{usage.isPending ? '-' : formatNumber(usage.daysBetween)}</td>
+                    <td className="py-4 pl-1 pr-4 text-right font-mono text-xs font-semibold text-slate-900">{formatNumber(usage.readingCount)}</td>
                   </tr>
                 ))}
               </tbody>
